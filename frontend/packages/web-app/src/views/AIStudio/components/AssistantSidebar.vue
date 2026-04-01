@@ -391,17 +391,30 @@ onBeforeUnmount(() => {
             <div
               v-if="expanded && canExpand(assistant)"
               :data-testid="`assistant-session-list-${assistant.id}`"
-              class="space-y-1 pt-1 pl-[30px] pr-1"
+              class="relative space-y-0.5 pt-1 pl-[38px] pr-1"
             >
+              <span
+                aria-hidden="true"
+                class="pointer-events-none absolute bottom-2 left-[14px] top-[4px] w-px bg-[rgba(114,111,255,0.16)]"
+              />
               <div
-                v-for="session in sessions"
+                v-for="(session, sessionIndex) in sessions"
                 :key="session.id"
                 :data-testid="`assistant-session-row-${assistant.id}-${session.id}`"
-                class="group/session flex items-center gap-1.5 rounded-[10px] px-2 py-1 transition-colors duration-150"
+                class="group/session relative flex items-center gap-1.5 rounded-[10px] px-2 py-1 transition-colors duration-150"
                 :class="session.id === activeSessionId
                   ? 'bg-[linear-gradient(180deg,rgba(242,242,255,0.96)_0%,rgba(236,237,252,0.92)_100%)] text-[#6468A8] ring-1 ring-[rgba(182,188,232,0.34)]'
                   : 'text-black/68 hover:bg-white/80 hover:text-black/84'"
               >
+                <span
+                  aria-hidden="true"
+                  class="pointer-events-none absolute left-[-24px] top-1/2 h-px w-[16px] -translate-y-1/2 bg-[rgba(114,111,255,0.22)]"
+                />
+                <span
+                  v-if="sessionIndex === sessions.length - 1"
+                  aria-hidden="true"
+                  class="pointer-events-none absolute -bottom-1 left-[-25px] top-1/2 w-[3px] bg-[rgba(255,255,255,0.98)]"
+                />
                 <button
                   class="flex min-w-0 flex-1 items-center gap-2 text-left"
                   @click="emit('select-session', assistant.id, session.id)"

@@ -31,7 +31,7 @@ export async function scanWorkspaceArtifacts(workspaceRoot: string): Promise<{
     id: `workspace-artifact-${index}`,
     name: relativePath,
     summary: 'Workspace file',
-    tag: '宸ヤ綔绌洪棿鏂囦欢',
+    tag: '工作区文件',
     tagTone: 'neutral',
   }))
 

@@ -255,13 +255,9 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       groupRoomSessions,
     )
     await api.deleteSession(sessionId, workspaceContext.workspacePath?.trim() || null)
-    const liveSessions = await api.listSessions().catch(() => [])
-    const liveRuntimeSessionIds = liveSessions
-      .filter((s) => !s.parentID && !s.time.archived)
-      .map((s) => s.id)
     await Promise.all([
-      assistantStore.cleanupMissingRuntimeSessions(liveRuntimeSessionIds),
-      assistantStore.cleanupMissingGroupRoomSessions(liveRuntimeSessionIds),
+      assistantStore.detachRuntimeSession(sessionId),
+      assistantStore.detachGroupRoomSession(sessionId),
     ])
     return { success: true }
   })

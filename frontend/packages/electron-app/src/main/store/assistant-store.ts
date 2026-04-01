@@ -58,6 +58,7 @@ export type AssistantStore = {
   deleteAssistant: (id: string) => Promise<DeleteAssistantResult | null>
   listAssistantSessions: () => Promise<AssistantSessionRecord[]>
   attachRuntimeSession: (assistantId: string, runtimeSessionId: string, title?: string | null) => Promise<AssistantSessionRecord>
+  detachRuntimeSession: (runtimeSessionId: string) => Promise<AssistantSessionRecord | null>
   renameSession: (runtimeSessionId: string, title?: string | null) => Promise<{ runtimeSessionId: string; title: string | null } | null>
   cleanupMissingRuntimeSessions: (runtimeSessionIds: string[]) => Promise<AssistantSessionCleanupResult>
   listGroupRooms: () => Promise<GroupRoomRecord[]>
@@ -66,6 +67,7 @@ export type AssistantStore = {
   deleteGroupRoom: (id: string) => Promise<GroupRoomRecord | null>
   listGroupRoomSessions: () => Promise<GroupRoomSessionRecord[]>
   attachGroupRoomSession: (groupRoomId: string, runtimeSessionId: string, title?: string | null) => Promise<GroupRoomSessionRecord>
+  detachGroupRoomSession: (runtimeSessionId: string) => Promise<GroupRoomSessionRecord | null>
   cleanupMissingGroupRoomSessions: (runtimeSessionIds: string[]) => Promise<GroupRoomSessionCleanupResult>
 }
 
@@ -229,6 +231,20 @@ export function createAssistantStore(options: AssistantStoreOptions): AssistantS
         await writeStoreState(storagePath, state)
         return cloneAssistantSession(session)!
       }),
+    detachRuntimeSession: async (runtimeSessionId) =>
+      runSerialized(async () => {
+        const storagePath = resolveStoragePath(options.storagePath)
+        const normalizedRuntimeSessionId = normalizeRequiredText(runtimeSessionId)
+        const state = await loadStoreState(storagePath)
+        const sessionIndex = state.assistantSessions.findIndex((session) => session.runtimeSessionId === normalizedRuntimeSessionId)
+        if (sessionIndex < 0) {
+          return null
+        }
+
+        const [removed] = state.assistantSessions.splice(sessionIndex, 1)
+        await writeStoreState(storagePath, state)
+        return cloneAssistantSession(removed)
+      }),
     renameSession: async (runtimeSessionId, title) =>
       runSerialized(async () => {
         const storagePath = resolveStoragePath(options.storagePath)
@@ -291,6 +307,20 @@ export function createAssistantStore(options: AssistantStoreOptions): AssistantS
 
         await writeStoreState(storagePath, state)
         return cloneGroupRoomSession(session)!
+      }),
+    detachGroupRoomSession: async (runtimeSessionId) =>
+      runSerialized(async () => {
+        const storagePath = resolveStoragePath(options.storagePath)
+        const normalizedRuntimeSessionId = normalizeRequiredText(runtimeSessionId)
+        const state = await loadStoreState(storagePath)
+        const sessionIndex = state.groupRoomSessions.findIndex((session) => session.runtimeSessionId === normalizedRuntimeSessionId)
+        if (sessionIndex < 0) {
+          return null
+        }
+
+        const [removed] = state.groupRoomSessions.splice(sessionIndex, 1)
+        await writeStoreState(storagePath, state)
+        return cloneGroupRoomSession(removed)
       }),
     cleanupMissingRuntimeSessions: async (runtimeSessionIds) =>
       runSerialized(async () => {

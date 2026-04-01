@@ -124,6 +124,7 @@ const draft = ref('')
 const localAttachments = ref<ComposerAttachment[]>([])
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const titleInputRef = ref<HTMLInputElement | null>(null)
+const timelineEndRef = ref<HTMLElement | null>(null)
 const activeTrigger = ref<ComposerTriggerState | null>(null)
 const activeMenuIndex = ref(0)
 const dismissedTriggerSignature = ref('')
@@ -131,6 +132,7 @@ const isComposerFocused = ref(false)
 const taskProgressExpanded = ref(false)
 const editingSessionTitle = ref(false)
 const sessionTitleDraft = ref('')
+const pendingAutoScroll = ref(false)
 
 const skillOptions: ComposerSkillOption[] = [
   { id: 'summary', label: '总结', badge: '总', description: '快速归纳当前会话重点、风险与下一步。' },
@@ -299,6 +301,15 @@ watch(
   { immediate: true },
 )
 
+watch(
+  () => props.session.id,
+  () => {
+    pendingAutoScroll.value = false
+    void scheduleScrollToBottom('auto')
+  },
+  { immediate: true },
+)
+
 watch(draft, async () => {
   await nextTick()
   resizeTextarea()
@@ -309,11 +320,39 @@ watch(activeMenuOptions, (options) => {
     activeMenuIndex.value = 0
 })
 
+watch(
+  () => [displayedTimeline.value.length, props.isAiTyping ? 1 : 0],
+  ([nextLength, nextTyping], [prevLength, prevTyping]) => {
+    if (!pendingAutoScroll.value)
+      return
+
+    const hasNewTimelineItem = nextLength > prevLength
+    const typingActivated = nextTyping > prevTyping
+
+    if (!hasNewTimelineItem && !typingActivated)
+      return
+
+    pendingAutoScroll.value = false
+    void scheduleScrollToBottom('smooth')
+  },
+  { flush: 'post' },
+)
+
 function resizeTextarea() {
   if (!textareaRef.value)
     return
   textareaRef.value.style.height = '0px'
   textareaRef.value.style.height = `${Math.min(Math.max(textareaRef.value.scrollHeight, 44), 128)}px`
+}
+
+async function scheduleScrollToBottom(behavior: ScrollBehavior = 'smooth') {
+  await nextTick()
+  requestAnimationFrame(() => {
+    timelineEndRef.value?.scrollIntoView({
+      behavior,
+      block: 'end',
+    })
+  })
 }
 
 function focusSessionTitleInput() {
@@ -801,6 +840,8 @@ function sendMessage() {
     mentions,
     skills,
   })
+  pendingAutoScroll.value = true
+  void scheduleScrollToBottom('smooth')
   draft.value = ''
   localAttachments.value = []
   activeTrigger.value = null
@@ -1104,10 +1145,13 @@ function onDraftKeydown(event: KeyboardEvent) {
             </div>
             <span class="text-[11px] font-medium leading-4 text-[#726FFF]">{{ session.assistantName }}</span>
           </div>
-          <div class="flex w-fit items-center gap-[5px] rounded-[16px] bg-[rgba(255,255,255,0.64)] px-4 py-3 shadow-[0_6px_14px_rgba(15,23,42,0.04)]">
-            <span class="h-1.5 w-1.5 rounded-full bg-black/32 animate-bounce [animation-delay:0ms]" />
-            <span class="h-1.5 w-1.5 rounded-full bg-black/32 animate-bounce [animation-delay:160ms]" />
-            <span class="h-1.5 w-1.5 rounded-full bg-black/32 animate-bounce [animation-delay:320ms]" />
+          <div class="flex w-fit min-w-[136px] items-center gap-2.5 rounded-[18px] bg-[linear-gradient(180deg,rgba(255,255,255,0.76)_0%,rgba(247,248,255,0.92)_100%)] px-4 py-2.5 shadow-[0_8px_18px_rgba(15,23,42,0.05)] ring-1 ring-[rgba(114,111,255,0.08)]">
+            <div class="flex items-center gap-1.5">
+              <span class="h-1.5 w-1.5 rounded-full bg-[#726FFF] animate-bounce [animation-delay:0ms]" />
+              <span class="h-1.5 w-1.5 rounded-full bg-[#726FFF]/75 animate-bounce [animation-delay:140ms]" />
+              <span class="h-1.5 w-1.5 rounded-full bg-[#726FFF]/55 animate-bounce [animation-delay:280ms]" />
+            </div>
+            <span class="text-[11px] font-medium leading-4 text-[#6B6AA8]">正在思考...</span>
           </div>
         </div>
 
@@ -1133,6 +1177,7 @@ function onDraftKeydown(event: KeyboardEvent) {
             <span class="shrink-0 text-black/18">›</span>
           </button>
         </div>
+        <div ref="timelineEndRef" class="h-px w-full" />
       </div>
     </ScrollArea>
 
