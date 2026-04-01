@@ -85,7 +85,7 @@ export interface AIStudioRunEventBatch {
 
 export interface AIStudioProvider {
   getBootstrap: () => Promise<AIStudioBootstrap>
-  getSessionDetail: (sessionId: string) => Promise<StudioSessionDetail>
+  getSessionDetail: (sessionId: string, options?: { includeWorkspace?: boolean }) => Promise<StudioSessionDetail>
   sendMessage: (payload: AIStudioSendMessagePayload) => Promise<AIStudioSessionMutationResult>
   submitChoiceForm: (payload: AIStudioChoiceSubmissionPayload) => Promise<AIStudioSessionMutationResult>
   submitParamForm: (payload: AIStudioParamSubmissionPayload) => Promise<AIStudioSessionMutationResult>

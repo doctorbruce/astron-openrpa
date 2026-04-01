@@ -1,4 +1,6 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { ipcMain, BrowserWindow, app } from 'electron'
 
 import {
   IPC_OPENCODE_AWAIT_INITIALIZATION,
@@ -35,6 +37,7 @@ import {
   toStudioSessionDetail,
   resolveDefaultSessionId,
 } from './opencode/adapter'
+import { createLogger } from './opencode/logging'
 import { scanWorkspaceArtifacts } from './opencode/workspace-scan'
 import { resolveSessionMessageContext, resolveSessionWorkspaceContext } from './opencode/workspace-context'
 import type { DesktopRuntimeEvent } from '../shared/sessions'
@@ -44,6 +47,7 @@ import type {
   GroupRoomRecord,
   GroupRoomSessionRecord,
 } from '../shared/assistants'
+import type { OpencodeSessionInfo } from '../shared/sessions'
 
 type OpencodeIpcDeps = {
   sidecar: SidecarManager
@@ -54,6 +58,8 @@ type OpencodeIpcDeps = {
   settingsStore: SettingsStore
   sessionStore: SessionStore
 }
+
+const logger = createLogger('ipc')
 
 export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
   const { sidecar, api, eventStream, skillsService, assistantStore, settingsStore, sessionStore } = deps
@@ -72,23 +78,15 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
   })
 
   ipcMain.handle(IPC_OPENCODE_GET_BOOTSTRAP, async () => {
-    const [assistants, groupRooms, sessions] = await Promise.all([
+    const [assistants, groupRooms, sessions, assistantSessions, groupRoomSessions] = await Promise.all([
       assistantStore.listAssistants(),
       assistantStore.listGroupRooms(),
       api.listSessions().catch(() => []),
-    ])
-
-    const rootSessions = sessions.filter((s) => !s.parentID && !s.time.archived)
-    const liveRuntimeSessionIds = rootSessions.map((s) => s.id)
-    await Promise.all([
-      assistantStore.cleanupMissingRuntimeSessions(liveRuntimeSessionIds),
-      assistantStore.cleanupMissingGroupRoomSessions(liveRuntimeSessionIds),
-    ])
-
-    const [assistantSessions, groupRoomSessions] = await Promise.all([
       assistantStore.listAssistantSessions(),
       assistantStore.listGroupRoomSessions(),
     ])
+
+    const rootSessions = sessions.filter((s) => !s.parentID && !s.time.archived)
 
     const assignedRuntimeSessionIds = new Set([
       ...assistantSessions.map((s) => s.runtimeSessionId),
@@ -98,11 +96,10 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
     const sessionsByAssistantId = new Map<string, typeof rootSessions>()
     for (const sess of assistantSessions) {
       const runtimeSession = rootSessions.find((s) => s.id === sess.runtimeSessionId)
-      if (!runtimeSession) continue
       const list = sessionsByAssistantId.get(sess.assistantId) ?? []
       list.push({
-        ...runtimeSession,
-        title: sess.title?.trim() || runtimeSession.title,
+        ...(runtimeSession || createFallbackSessionInfo(sess.runtimeSessionId, sess.title, sess.createdAt, sess.updatedAt)),
+        title: sess.title?.trim() || runtimeSession?.title || '未命名会话',
       })
       sessionsByAssistantId.set(sess.assistantId, list)
     }
@@ -110,11 +107,10 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
     const sessionsByGroupRoomId = new Map<string, typeof rootSessions>()
     for (const sess of groupRoomSessions) {
       const runtimeSession = rootSessions.find((s) => s.id === sess.runtimeSessionId)
-      if (!runtimeSession) continue
       const list = sessionsByGroupRoomId.get(sess.groupRoomId) ?? []
       list.push({
-        ...runtimeSession,
-        title: sess.title?.trim() || runtimeSession.title,
+        ...(runtimeSession || createFallbackSessionInfo(sess.runtimeSessionId, sess.title, sess.createdAt, sess.updatedAt)),
+        title: sess.title?.trim() || runtimeSession?.title || '未命名会话',
       })
       sessionsByGroupRoomId.set(sess.groupRoomId, list)
     }
@@ -129,12 +125,54 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       unassignedSessions,
     )
 
+    logger.info('bootstrap assembled sidebar groups', {
+      runtimeRootSessionIds: rootSessions.map(session => session.id),
+      persistedAssistantSessionIds: assistantSessions.map(session => ({
+        assistantId: session.assistantId,
+        runtimeSessionId: session.runtimeSessionId,
+        title: session.title,
+      })),
+      groups: assistantGroups.map(group => ({
+        groupId: group.id,
+        assistants: group.assistants.map(assistant => ({
+          assistantId: assistant.id,
+          sessionIds: assistant.sessions.map(session => session.id),
+        })),
+      })),
+    })
+
+    void writeBootstrapDebugSnapshot({
+      runtimeRootSessionIds: rootSessions.map(session => session.id),
+      persistedAssistantSessions: assistantSessions.map(session => ({
+        assistantId: session.assistantId,
+        runtimeSessionId: session.runtimeSessionId,
+        title: session.title,
+      })),
+      persistedGroupRoomSessions: groupRoomSessions.map(session => ({
+        groupRoomId: session.groupRoomId,
+        runtimeSessionId: session.runtimeSessionId,
+        title: session.title,
+      })),
+      assistantGroups,
+    })
+
     const defaultSessionId = resolveDefaultSessionId(rootSessions)
 
     return { assistantGroups, defaultSessionId }
   })
 
-  ipcMain.handle(IPC_OPENCODE_GET_SESSION, async (_event, sessionId: string) => {
+  ipcMain.handle(
+    IPC_OPENCODE_GET_SESSION,
+    async (
+      _event,
+      input: string | {
+        sessionId: string
+        includeWorkspace?: boolean
+      },
+    ) => {
+      const sessionId = typeof input === 'string' ? input : input.sessionId
+      const includeWorkspace = typeof input === 'string' ? true : input.includeWorkspace !== false
+
     const [assistants, groupRooms, assistantSessions, groupRoomSessions] = await Promise.all([
       assistantStore.listAssistants(),
       assistantStore.listGroupRooms(),
@@ -162,7 +200,7 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       groupRoomSessions,
     )
     const workspacePath = workspaceContext.workspacePath?.trim() || session.directory
-    const workspaceSnapshot = workspacePath
+    const workspaceSnapshot = includeWorkspace && workspacePath
       ? await scanWorkspaceArtifacts(workspacePath)
       : { workspaceFiles: [], artifacts: [] }
 
@@ -174,7 +212,8 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       workspaceFiles: workspaceSnapshot.workspaceFiles,
       artifacts: workspaceSnapshot.artifacts,
     })
-  })
+    },
+  )
 
   ipcMain.handle(
     IPC_OPENCODE_CREATE_SESSION,
@@ -299,15 +338,11 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
   })
 
   ipcMain.handle(IPC_OPENCODE_SAVE_ASSISTANT, async (_event, input: Parameters<AssistantStore['saveAssistant']>[0]) => {
-    const result = await assistantStore.saveAssistant(input)
-    await sidecar.restart()
-    return result
+    return assistantStore.saveAssistant(input)
   })
 
   ipcMain.handle(IPC_OPENCODE_DELETE_ASSISTANT, async (_event, id: string) => {
-    const result = await assistantStore.deleteAssistant(id)
-    await sidecar.restart()
-    return result
+    return assistantStore.deleteAssistant(id)
   })
 
   ipcMain.handle(IPC_OPENCODE_LIST_GROUP_ROOMS, async () => {
@@ -315,15 +350,11 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
   })
 
   ipcMain.handle(IPC_OPENCODE_SAVE_GROUP_ROOM, async (_event, input: Parameters<AssistantStore['saveGroupRoom']>[0]) => {
-    const result = await assistantStore.saveGroupRoom(input)
-    await sidecar.restart()
-    return result
+    return assistantStore.saveGroupRoom(input)
   })
 
   ipcMain.handle(IPC_OPENCODE_DELETE_GROUP_ROOM, async (_event, id: string) => {
-    const result = await assistantStore.deleteGroupRoom(id)
-    await sidecar.restart()
-    return result
+    return assistantStore.deleteGroupRoom(id)
   })
 
   ipcMain.handle(IPC_OPENCODE_LIST_SKILLS, async () => {
@@ -416,5 +447,54 @@ function broadcastToAllWindows(channel: string, payload: unknown) {
     if (!win.isDestroyed()) {
       win.webContents.send(channel, payload)
     }
+  }
+}
+
+function createFallbackSessionInfo(
+  sessionId: string,
+  title: string | null | undefined,
+  createdAt: string,
+  updatedAt: string,
+): OpencodeSessionInfo {
+  const created = Date.parse(createdAt)
+  const updated = Date.parse(updatedAt)
+
+  return {
+    id: sessionId,
+    slug: sessionId,
+    projectID: 'persisted-session',
+    directory: '',
+    title: title?.trim() || '未命名会话',
+    version: 'persisted',
+    time: {
+      created: Number.isFinite(created) ? created : Date.now(),
+      updated: Number.isFinite(updated) ? updated : Number.isFinite(created) ? created : Date.now(),
+    },
+  }
+}
+
+async function writeBootstrapDebugSnapshot(payload: {
+  runtimeRootSessionIds: string[]
+  persistedAssistantSessions: Array<{
+    assistantId: string
+    runtimeSessionId: string
+    title: string | null | undefined
+  }>
+  persistedGroupRoomSessions: Array<{
+    groupRoomId: string
+    runtimeSessionId: string
+    title: string | null | undefined
+  }>
+  assistantGroups: ReturnType<typeof toStudioAssistantGroups>
+}) {
+  try {
+    const debugPath = path.join(app.getPath('userData'), 'opencode-bootstrap-debug.json')
+    await writeFile(debugPath, JSON.stringify({
+      capturedAt: new Date().toISOString(),
+      ...payload,
+    }, null, 2), 'utf8')
+  }
+  catch (error) {
+    logger.warn('failed to write bootstrap debug snapshot', error instanceof Error ? error.message : String(error))
   }
 }

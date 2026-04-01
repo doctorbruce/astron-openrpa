@@ -128,7 +128,8 @@ Electron main: opencode-ipc.ts
 ## 6. 资源与 Sidecar
 
 - opencode 二进制通过 electron-app 脚本拉取并放入 **resources**，**electron-builder** `extraResources` 等与打包说明以工程内实际配置为准。
-- 用户需在 **`electron-app` 包目录** 执行 `npm run fetch:opencode`（而非误在仓库根或其它包执行）。
+- 用户可在 **`frontend` 根目录** 直接执行 `npm run fetch:opencode`；该命令会转发到 `electron-app` 包内的实际拉取脚本。若已进入 **`electron-app`** 包目录，也可直接执行同名命令。
+- 默认拉取固定版本 `v1.3.13`；如需临时拉取 GitHub 最新发行版，可先设置 `OPENCODE_SIDECAR_TAG=latest` 再执行该命令。
 
 ---
 

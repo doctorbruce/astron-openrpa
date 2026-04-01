@@ -62,7 +62,8 @@ contextBridge.exposeInMainWorld('opencodeApi', {
   getRuntimeStatus: () => ipcRenderer.invoke('opencode:getRuntimeStatus'),
   awaitInitialization: () => ipcRenderer.invoke('opencode:awaitInitialization'),
   getBootstrap: () => ipcRenderer.invoke('opencode:getBootstrap'),
-  getSession: (sessionId: string) => ipcRenderer.invoke('opencode:getSession', sessionId),
+  getSession: (sessionId: string, options?: { includeWorkspace?: boolean }) =>
+    ipcRenderer.invoke('opencode:getSession', { sessionId, includeWorkspace: options?.includeWorkspace }),
   createSession: (payload: { title?: string | null; assistantId?: string | null; groupRoomId?: string | null; workspacePath?: string | null }) => ipcRenderer.invoke('opencode:createSession', payload),
   renameSession: (payload: { sessionId: string; title?: string | null }) => ipcRenderer.invoke('opencode:renameSession', payload),
   deleteSession: (sessionId: string) => ipcRenderer.invoke('opencode:deleteSession', sessionId),

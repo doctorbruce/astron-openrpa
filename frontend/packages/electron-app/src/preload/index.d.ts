@@ -8,7 +8,7 @@ declare global {
       getRuntimeStatus: () => Promise<unknown>
       awaitInitialization: () => Promise<unknown>
       getBootstrap: () => Promise<{ assistantGroups: unknown[]; defaultSessionId: string }>
-      getSession: (sessionId: string) => Promise<unknown>
+  getSession: (sessionId: string, options?: { includeWorkspace?: boolean }) => Promise<unknown>
       createSession: (payload: { title?: string | null; assistantId?: string | null; groupRoomId?: string | null; workspacePath?: string | null }) => Promise<unknown>
       renameSession: (payload: { sessionId: string; title?: string | null }) => Promise<unknown>
       deleteSession: (sessionId: string) => Promise<{ success: boolean }>

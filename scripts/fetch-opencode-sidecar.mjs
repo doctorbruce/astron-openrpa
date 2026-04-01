@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process"
 import { fileURLToPath } from "node:url"
 
 const repo = process.env.OPENCODE_SIDECAR_REPO ?? "anomalyco/opencode"
-const releaseTag = process.env.OPENCODE_SIDECAR_TAG ?? "v1.2.27"
+const releaseTag = process.env.OPENCODE_SIDECAR_TAG ?? "v1.3.13"
 const scriptDir = path.dirname(fileURLToPath(import.meta.url))
 const projectRoot = path.resolve(scriptDir, "..")
 const destination = path.join(projectRoot, "resources", "opencode-cli.exe")
@@ -27,6 +27,10 @@ function normalizedTag(tag) {
   return String(tag).replace(/^v/i, "")
 }
 
+function isLatestReleaseTag(tag) {
+  return String(tag).trim().toLowerCase() === "latest"
+}
+
 async function fetchJson(url, init = {}) {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(new Error(`Timed out after ${FETCH_TIMEOUT_MS}ms`)), FETCH_TIMEOUT_MS)
@@ -42,7 +46,10 @@ async function fetchJson(url, init = {}) {
 }
 
 async function readReleaseMetadata() {
-  const apiUrl = `https://api.github.com/repos/${repo}/releases/tags/${releaseTag}`
+  const usingLatest = isLatestReleaseTag(releaseTag)
+  const apiUrl = usingLatest
+    ? `https://api.github.com/repos/${repo}/releases/latest`
+    : `https://api.github.com/repos/${repo}/releases/tags/${releaseTag}`
   log(`Reading release metadata from ${apiUrl}`)
   const authHeader = process.env.GITHUB_TOKEN ? { Authorization: `Bearer ${process.env.GITHUB_TOKEN}` } : {}
   const apiResponse = await fetchJson(apiUrl, {
@@ -58,7 +65,9 @@ async function readReleaseMetadata() {
     return await apiResponse.json()
   }
 
-  const pageUrl = `https://github.com/${repo}/releases/tag/${releaseTag}`
+  const pageUrl = usingLatest
+    ? `https://github.com/${repo}/releases/latest`
+    : `https://github.com/${repo}/releases/tag/${releaseTag}`
   log(`API lookup failed with HTTP ${apiResponse.status}; falling back to ${pageUrl}`)
   const pageResponse = await fetchJson(pageUrl, {
     headers: {
@@ -74,7 +83,7 @@ async function readReleaseMetadata() {
   const html = await pageResponse.text()
   const assetMatches = [...html.matchAll(/href="([^"]+\/releases\/download\/[^"]+?\/([^"/?#]+))"/g)]
   const assets = assetMatches.map(([, url, name]) => ({ name, browser_download_url: `https://github.com${url.replace(/&amp;/g, "&")}` }))
-  return { tag_name: releaseTag, assets }
+  return { tag_name: usingLatest ? "latest" : releaseTag, assets }
 }
 
 async function downloadAsset(asset, targetFile) {
@@ -176,10 +185,11 @@ async function main() {
   const release = await readReleaseMetadata()
   const assets = Array.isArray(release.assets) ? release.assets : []
   const asset = selectWindowsArchive(assets)
+  const resolvedTag = release.tag_name || releaseTag
 
   if (!asset) {
     const names = assets.map((entry) => entry?.name).filter(Boolean).join(", ")
-    throw new Error(`Could not find a Windows x64 zip asset in release ${releaseTag}. Available assets: ${names || "(none)"}`)
+    throw new Error(`Could not find a Windows x64 zip asset in release ${resolvedTag}. Available assets: ${names || "(none)"}`)
   }
 
   const bytes = await downloadAsset(asset, archivePath)
@@ -211,8 +221,9 @@ async function main() {
 
   const manifest = {
     repository: repo,
-    releaseTag,
-    normalizedVersion: normalizedTag(releaseTag),
+    releaseTag: resolvedTag,
+    requestedTag: releaseTag,
+    normalizedVersion: normalizedTag(resolvedTag),
     assetName: asset.name,
     assetUrl: asset.browser_download_url,
     archiveSha256: sha256(bytes),

@@ -12,6 +12,7 @@
     "preinstall": "npx only-allow pnpm",
     "lint": "eslint",
     "lint:fix": "eslint --fix \"**/*.{vue,ts,tsx,js,jsx}\"",
+    "fetch:opencode": "pnpm --filter astron-rpa run fetch:opencode",
     "set-env": "pnpm --filter @rpa/web-app run set-env",
     "set-env:saas": "pnpm --filter @rpa/web-app run set-env saas",
     "set-env:enterprise": "pnpm --filter @rpa/web-app run set-env enterprise",

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { MoreHorizontal, Pencil, Plus, Search, Settings, Trash2, Users, Zap } from 'lucide-vue-next'
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,6 +40,8 @@ const emit = defineEmits<{
 const searchQuery = ref('')
 const focusedAssistantId = ref('')
 const confirmingAssistantDeleteId = ref<string | null>(null)
+const createMenuAnchorRef = ref<HTMLElement | null>(null)
+const createMenuWidth = ref(224)
 
 const unifiedAssistants = computed<SidebarAssistantEntry[]>(() =>
   props.groups.flatMap(group =>
@@ -63,7 +65,7 @@ const visibleAssistants = computed<VisibleSidebarAssistant[]>(() => {
     return unifiedAssistants.value.map(assistant => ({
       assistant,
       sessions: assistant.sessions,
-      expanded: assistant.id === focusedAssistantId.value,
+      expanded: assistant.id === focusedAssistantId.value && assistant.sessions.length > 0,
     }))
   }
 
@@ -104,8 +106,10 @@ function syncFocusedAssistant() {
     return
   }
 
-  if (!assistants.some(assistant => assistant.id === focusedAssistantId.value))
-    focusedAssistantId.value = assistants[0].id
+  if (!assistants.some(assistant => assistant.id === focusedAssistantId.value)) {
+    const firstAssistantWithSessions = assistants.find(assistant => assistant.sessions.length > 0)
+    focusedAssistantId.value = firstAssistantWithSessions?.id || assistants[0].id
+  }
 }
 
 watch(() => props.activeSessionId, syncFocusedAssistant, { immediate: true })
@@ -173,29 +177,58 @@ function showAssistantDeleteConfirm(assistantId: string) {
 function cancelAssistantDeleteConfirm() {
   confirmingAssistantDeleteId.value = null
 }
+
+let createMenuResizeObserver: ResizeObserver | null = null
+
+function syncCreateMenuWidth() {
+  const width = createMenuAnchorRef.value?.getBoundingClientRect().width || 224
+  createMenuWidth.value = Math.min(Math.max(196, Math.round(width * 0.72)), 232)
+}
+
+onMounted(() => {
+  syncCreateMenuWidth()
+  if (typeof ResizeObserver === 'undefined' || !createMenuAnchorRef.value)
+    return
+
+  createMenuResizeObserver = new ResizeObserver(() => {
+    syncCreateMenuWidth()
+  })
+  createMenuResizeObserver.observe(createMenuAnchorRef.value)
+})
+
+onBeforeUnmount(() => {
+  createMenuResizeObserver?.disconnect()
+  createMenuResizeObserver = null
+})
 </script>
 
 <template>
   <aside
     data-testid="ai-sidebar-shell"
-    class="relative my-3 ml-3 mr-2.5 flex min-h-0 w-[clamp(276px,19.5vw,320px)] shrink-0 self-stretch flex-col overflow-hidden rounded-[24px] bg-[radial-gradient(circle_at_top_left,rgba(114,111,255,0.10),transparent_30%),linear-gradient(180deg,rgba(255,255,255,0.74)_0%,rgba(252,252,255,0.9)_22%,rgba(255,255,255,0.94)_100%)] shadow-[0_14px_34px_rgba(15,23,42,0.028)] backdrop-blur-[16px]"
+    class="relative my-3 ml-3 mr-2.5 flex min-h-0 w-[clamp(276px,19.5vw,320px)] shrink-0 self-stretch flex-col overflow-hidden rounded-[24px] bg-[radial-gradient(circle_at_top_left,rgba(114,111,255,0.08),transparent_28%),linear-gradient(180deg,rgba(255,255,255,0.82)_0%,rgba(252,252,255,0.92)_24%,rgba(255,255,255,0.96)_100%)] shadow-[0_10px_24px_rgba(15,23,42,0.022)] backdrop-blur-[8px]"
     style="font-family: var(--font-sans-ui);"
   >
-    <div class="relative px-4 pb-3 pt-4">
-      <a-dropdown :trigger="['click']" placement="bottomLeft" :destroy-popup-on-hide="true" overlay-class-name="ai-sidebar-create-menu-overlay">
+    <div ref="createMenuAnchorRef" class="relative px-4 pb-3 pt-4">
+      <a-dropdown
+        :trigger="['click']"
+        placement="bottomCenter"
+        :destroy-popup-on-hide="true"
+        overlay-class-name="ai-sidebar-create-menu-overlay"
+        :overlay-style="{ width: `${createMenuWidth}px` }"
+      >
         <Button
           size="sm"
           data-testid="template-create-trigger"
-          class="h-10 w-full justify-center gap-2 rounded-[15px] bg-[linear-gradient(135deg,#726FFF,#5D59FF)] text-[13px] font-semibold shadow-[0_10px_18px_rgba(114,111,255,0.16)] hover:translate-y-0"
+          class="h-10 w-full justify-center gap-2 rounded-[15px] bg-[linear-gradient(135deg,#726FFF,#5D59FF)] px-4 text-[13px] font-semibold shadow-[0_8px_18px_rgba(114,111,255,0.18)] transition-colors hover:translate-y-0"
         >
           <Plus class="h-4 w-4" />
           <span>新建模板</span>
         </Button>
         <template #overlay>
-          <div class="w-[188px] rounded-[16px] bg-[rgba(255,255,255,0.98)] p-1.5 shadow-[0_18px_40px_rgba(15,23,42,0.12)] backdrop-blur-[18px]">
+          <div class="w-full overflow-hidden rounded-[18px] bg-[linear-gradient(180deg,rgba(255,255,255,0.97)_0%,rgba(248,249,255,0.95)_100%)] p-2 shadow-[0_14px_28px_rgba(15,23,42,0.10)] backdrop-blur-[10px]">
             <button
               data-testid="create-assistant-template"
-              class="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left transition-colors hover:bg-[#F6F8FF]"
+              class="flex w-full appearance-none items-center gap-2 rounded-[14px] border-0 bg-transparent px-4 py-2.5 text-left transition-colors hover:bg-[rgba(114,111,255,0.08)]"
               @click="emit('open-new-assistant')"
             >
               <Plus class="h-3.5 w-3.5 text-black/52" />
@@ -204,7 +237,7 @@ function cancelAssistantDeleteConfirm() {
             <button
               v-if="hasCollaborationAssistant"
               data-testid="create-group-template"
-              class="flex w-full items-center gap-2 rounded-[12px] px-3 py-2 text-left transition-colors hover:bg-[#F6F8FF]"
+              class="mt-1 flex w-full appearance-none items-center gap-2 rounded-[14px] border-0 bg-transparent px-4 py-2.5 text-left transition-colors hover:bg-[rgba(114,111,255,0.08)]"
               @click="emit('open-new-group-template')"
             >
               <Users class="h-3.5 w-3.5 text-[#5E5AE8]" />
@@ -238,7 +271,7 @@ function cancelAssistantDeleteConfirm() {
           >
             <div
               :data-testid="`assistant-shell-${assistant.id}`"
-              class="group/assistant relative flex items-center gap-1.5 rounded-[14px] px-2.5 py-1.5 transition-all duration-200"
+              class="group/assistant relative flex items-center gap-1.5 rounded-[14px] px-2.5 py-1.5 transition-colors duration-150"
               :class="assistant.id === focusedAssistantId
                 ? 'bg-[linear-gradient(180deg,rgba(238,236,255,0.98)_0%,rgba(230,228,255,0.94)_100%)] shadow-[0_10px_22px_rgba(114,111,255,0.10)] ring-1 ring-[rgba(114,111,255,0.12)]'
                 : 'opacity-[0.88] hover:bg-white/42 hover:opacity-100'"
@@ -294,7 +327,7 @@ function cancelAssistantDeleteConfirm() {
 
               <button
                 :data-testid="`assistant-new-session-trigger-${assistant.id}`"
-                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-[rgba(114,111,255,0.06)] text-[#716DF8] shadow-[0_4px_12px_rgba(114,111,255,0.06)] transition-all hover:bg-[rgba(114,111,255,0.10)] hover:text-[#5D59FF]"
+                class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-[rgba(114,111,255,0.06)] text-[#716DF8] shadow-[0_3px_8px_rgba(114,111,255,0.05)] transition-opacity transition-colors hover:bg-[rgba(114,111,255,0.10)] hover:text-[#5D59FF]"
                 :class="assistant.id === focusedAssistantId ? 'opacity-100' : 'opacity-0 group-hover/assistant:opacity-100'"
                 title="新建会话"
                 @click.stop="emit('open-new-session', assistant.id)"
@@ -305,7 +338,7 @@ function cancelAssistantDeleteConfirm() {
               <a-dropdown :trigger="['click']" placement="bottomRight" :destroy-popup-on-hide="true" overlay-class-name="ai-sidebar-assistant-menu-overlay">
                 <button
                   :data-testid="`assistant-more-trigger-${assistant.id}`"
-                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-white/70 text-black/42 shadow-[0_4px_12px_rgba(15,23,42,0.04)] transition-all hover:bg-white"
+                  class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-white/70 text-black/42 shadow-[0_3px_8px_rgba(15,23,42,0.03)] transition-opacity transition-colors hover:bg-white"
                   :class="assistant.id === focusedAssistantId ? 'opacity-100' : 'opacity-0 group-hover/assistant:opacity-100'"
                   title="更多操作"
                 >
@@ -364,7 +397,7 @@ function cancelAssistantDeleteConfirm() {
                 v-for="session in sessions"
                 :key="session.id"
                 :data-testid="`assistant-session-row-${assistant.id}-${session.id}`"
-                class="group/session flex items-center gap-1.5 rounded-[10px] px-2 py-1 transition-all duration-150"
+                class="group/session flex items-center gap-1.5 rounded-[10px] px-2 py-1 transition-colors duration-150"
                 :class="session.id === activeSessionId
                   ? 'bg-[linear-gradient(180deg,rgba(242,242,255,0.96)_0%,rgba(236,237,252,0.92)_100%)] text-[#6468A8] ring-1 ring-[rgba(182,188,232,0.34)]'
                   : 'text-black/68 hover:bg-white/80 hover:text-black/84'"
@@ -453,3 +486,40 @@ function cancelAssistantDeleteConfirm() {
 
   </aside>
 </template>
+
+<style scoped>
+:global(.ai-sidebar-create-menu-overlay) {
+  padding-top: 8px;
+}
+
+:global(.ai-sidebar-create-menu-overlay.ant-dropdown),
+:global(.ai-sidebar-create-menu-overlay .ant-dropdown),
+:global(.ai-sidebar-create-menu-overlay .ant-dropdown-content) {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+:global(.ai-sidebar-create-menu-overlay .ant-dropdown) {
+  box-shadow: none !important;
+}
+
+:global(.ai-sidebar-create-menu-overlay > div) {
+  border: none !important;
+  outline: none !important;
+}
+
+:global(.ai-sidebar-create-menu-overlay button) {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+:global(.ai-sidebar-create-menu-overlay button:focus),
+:global(.ai-sidebar-create-menu-overlay button:focus-visible),
+:global(.ai-sidebar-create-menu-overlay button:active) {
+  outline: none !important;
+  box-shadow: none !important;
+}
+</style>

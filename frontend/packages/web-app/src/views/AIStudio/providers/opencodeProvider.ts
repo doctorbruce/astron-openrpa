@@ -13,7 +13,7 @@ import type { StudioMessageAttachment } from '../types'
 
 export type OpencodeDesktopApi = {
   getBootstrap: () => Promise<AIStudioBootstrap>
-  getSession: (sessionId: string) => Promise<unknown>
+  getSession: (sessionId: string, options?: { includeWorkspace?: boolean }) => Promise<unknown>
   createSession: (payload: { title?: string | null; assistantId?: string | null; groupRoomId?: string | null; workspacePath?: string | null }) => Promise<{ id: string }>
   renameSession: (payload: { sessionId: string; title?: string | null }) => Promise<{ success: boolean }>
   deleteSession: (sessionId: string) => Promise<{ success: boolean }>
@@ -49,9 +49,12 @@ export function getOpencodeDesktopApi(): OpencodeDesktopApi {
   return window.opencodeApi as OpencodeDesktopApi
 }
 
-async function fetchSessionDetail(sessionId: string): Promise<import('../types').StudioSessionDetail> {
+async function fetchSessionDetail(
+  sessionId: string,
+  options?: { includeWorkspace?: boolean },
+): Promise<import('../types').StudioSessionDetail> {
   const api = getOpencodeDesktopApi()
-  const result = await api.getSession(sessionId)
+  const result = await api.getSession(sessionId, options)
   return result as import('../types').StudioSessionDetail
 }
 
@@ -92,8 +95,8 @@ export const opencodeAIStudioProvider: AIStudioProvider = {
     return result as AIStudioBootstrap
   },
 
-  getSessionDetail: async (sessionId: string) => {
-    return fetchSessionDetail(sessionId)
+  getSessionDetail: async (sessionId: string, options?: { includeWorkspace?: boolean }) => {
+    return fetchSessionDetail(sessionId, options)
   },
 
   sendMessage: async (payload: AIStudioSendMessagePayload): Promise<AIStudioSessionMutationResult> => {
@@ -103,7 +106,7 @@ export const opencodeAIStudioProvider: AIStudioProvider = {
       text: payload.content,
       attachments: payload.attachments?.map(toDesktopAttachment),
     })
-    const session = await fetchSessionDetail(payload.sessionId)
+    const session = await fetchSessionDetail(payload.sessionId, { includeWorkspace: false })
     // Opencode processes messages asynchronously; the user message may not yet
     // be persisted when we fetch right after sendMessage. Add it optimistically
     // so it is immediately visible in the UI.
@@ -134,7 +137,7 @@ export const opencodeAIStudioProvider: AIStudioProvider = {
       groupRoomId: payload.agentId ?? null,
       workspacePath: payload.workspacePath ?? null,
     })
-    const session = await fetchSessionDetail(created.id)
+    const session = await fetchSessionDetail(created.id, { includeWorkspace: false })
     return { session }
   },
 
@@ -144,7 +147,7 @@ export const opencodeAIStudioProvider: AIStudioProvider = {
       sessionId: payload.sessionId,
       title: payload.title ?? null,
     })
-    const session = await fetchSessionDetail(payload.sessionId)
+    const session = await fetchSessionDetail(payload.sessionId, { includeWorkspace: false })
     return { session }
   },
 

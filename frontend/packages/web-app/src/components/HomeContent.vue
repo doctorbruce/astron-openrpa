@@ -20,17 +20,17 @@ const route = useRoute()
 const router = useRouter()
 const { appInfo } = storeToRefs(appStore)
 const aiStudioStore = useAIStudioStore()
-const { assistantGroups } = storeToRefs(aiStudioStore)
+const { activeSessionId: storeActiveSessionId, assistantGroups } = storeToRefs(aiStudioStore)
 
 const isMarket = computed(() => route.matched[0].name === APPLICATIONMARKET)
 const isAIStudio = computed(() => route.matched[0].name === AIASSISTANT)
 const routeDefaultSessionId = ''
-const activeSessionId = computed(() => String(route.query.sessionId || routeDefaultSessionId))
+const routeSessionId = computed(() => String(route.query.sessionId || routeDefaultSessionId))
 
 async function handleSelectSession(_assistantId: string, sessionId: string) {
   aiStudioStore.openSurface('main')
-  await aiStudioStore.setActiveSession(sessionId)
-  await router.replace({
+  void aiStudioStore.setActiveSession(sessionId)
+  void router.replace({
     query: {
       ...route.query,
       sessionId,
@@ -69,7 +69,7 @@ function handleOpenNewSession(assistantId: string) {
 }
 
 watch(
-  [isAIStudio, activeSessionId],
+  [isAIStudio, routeSessionId],
   ([visible, sessionId]) => {
     if (visible)
       void aiStudioStore.ensureInitialized(sessionId)
@@ -84,7 +84,7 @@ watch(
     <AIStudioSidebar
       v-else-if="isAIStudio"
       :groups="assistantGroups"
-      :active-session-id="activeSessionId"
+      :active-session-id="storeActiveSessionId"
       :active-surface="aiStudioStore.activeSurface"
       @select-session="handleSelectSession"
       @open-edit-assistant="aiStudioStore.openEditAssistant($event)"
@@ -111,7 +111,7 @@ watch(
         :data-testid="isAIStudio ? 'ai-studio-shell' : undefined"
         class="h-full"
         :class="isAIStudio
-          ? 'overflow-hidden rounded-[24px] bg-[rgba(255,255,255,0.28)] shadow-[0_20px_48px_rgba(15,23,42,0.03)]'
+          ? 'overflow-hidden rounded-[24px] bg-[rgba(255,255,255,0.22)] shadow-[0_12px_28px_rgba(15,23,42,0.025)]'
           : ''"
       >
         <router-view />

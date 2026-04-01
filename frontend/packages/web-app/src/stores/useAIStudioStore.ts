@@ -60,17 +60,36 @@ function extractSessionIds(groups: StudioAssistantGroup[]) {
   )
 }
 
-function normalizeSessionDetail(detail: StudioSessionDetail): StudioSessionDetail {
-  return {
-    ...detail,
-    selectedArtifactId: detail.selectedArtifactId || detail.artifacts[0]?.id,
+  function normalizeSessionDetail(detail: StudioSessionDetail): StudioSessionDetail {
+    return {
+      ...detail,
+      selectedArtifactId: detail.selectedArtifactId || detail.artifacts[0]?.id,
+    }
   }
-}
+
+  function mergeWorkspaceSnapshot(
+    previous: StudioSessionDetail | undefined,
+    next: StudioSessionDetail,
+    includeWorkspace: boolean,
+  ): StudioSessionDetail {
+    if (includeWorkspace || !previous)
+      return next
+
+    return {
+      ...next,
+      workspacePath: next.workspacePath || previous.workspacePath,
+      workspaceFiles: previous.workspaceFiles,
+      artifacts: previous.artifacts,
+      workspacePreview: previous.workspacePreview,
+      selectedArtifactId: previous.selectedArtifactId || next.selectedArtifactId,
+    }
+  }
 
 export const useAIStudioStore = defineStore('aiStudio', () => {
   const assistantGroups = ref<StudioAssistantGroup[]>([])
   const sessionMap = ref<Record<string, StudioSessionDetail>>({})
   const activeSessionId = ref(INITIAL_SESSION_ID)
+  const activeSessionLoading = ref(false)
   const activeSurface = ref<'main' | 'automation' | 'settings'>('main')
   const workspaceOpen = ref(false)
   const invitedAssistants = ref<string[]>([])
@@ -91,10 +110,9 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
   let queuedRuntimeRefreshSessionId: string | null = null
 
   const activeSession = computed(() => {
-    return sessionMap.value[activeSessionId.value]
-      || (INITIAL_SESSION_ID ? sessionMap.value[INITIAL_SESSION_ID] : undefined)
-      || Object.values(sessionMap.value)[0]
-      || null
+    if (!activeSessionId.value)
+      return null
+    return sessionMap.value[activeSessionId.value] || null
   })
 
   const newSessionAssistant = computed(() => {
@@ -216,7 +234,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     }
 
     if (!sessionMap.value[nextSessionId])
-      await loadSessionDetail(nextSessionId, { force: true })
+      await loadSessionDetail(nextSessionId, { force: true, includeWorkspace: false })
     markSessionActive(nextSessionId)
     return nextSessionId
   }
@@ -249,12 +267,17 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     }))
   }
 
-  async function loadSessionDetail(sessionId: string, options: { force?: boolean } = {}) {
+  async function loadSessionDetail(
+    sessionId: string,
+    options: { force?: boolean, includeWorkspace?: boolean } = {},
+  ) {
     if (!options.force && sessionMap.value[sessionId])
       return sessionMap.value[sessionId]
 
-    const detail = await provider.getSessionDetail(sessionId)
-    return updateSessionDetail(detail)
+    const includeWorkspace = options.includeWorkspace !== false
+    const detail = await provider.getSessionDetail(sessionId, { includeWorkspace })
+    const mergedDetail = mergeWorkspaceSnapshot(sessionMap.value[sessionId], detail, includeWorkspace)
+    return updateSessionDetail(mergedDetail)
   }
 
   async function runMutation(meta: NonNullable<PendingMutation>, task: () => Promise<AIStudioSessionMutationResult>) {
@@ -293,14 +316,17 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
       }
 
       if (activeSessionId.value) {
-        await loadSessionDetail(activeSessionId.value)
+        activeSessionLoading.value = true
+        await loadSessionDetail(activeSessionId.value, { includeWorkspace: false })
         markSessionActive(activeSessionId.value)
+        activeSessionLoading.value = false
       }
     }
     catch (error) {
       errorMessage.value = error instanceof Error ? error.message : 'AI Studio 数据初始化失败'
     }
     finally {
+      activeSessionLoading.value = false
       loading.value = false
     }
   }
@@ -310,10 +336,21 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     workspaceOpen.value = false
     invitedAssistants.value = []
     isAiTyping.value = false
+    markSessionActive(activeSessionId.value)
     if (!activeSessionId.value)
       return
-    await loadSessionDetail(activeSessionId.value)
-    markSessionActive(activeSessionId.value)
+    if (sessionMap.value[activeSessionId.value])
+      return
+
+    activeSessionLoading.value = true
+    try {
+      await loadSessionDetail(activeSessionId.value, {
+        includeWorkspace: workspaceOpen.value,
+      })
+    }
+    finally {
+      activeSessionLoading.value = false
+    }
   }
 
   function openSurface(surface: 'main' | 'automation' | 'settings') {
@@ -321,11 +358,16 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
   }
 
   function toggleWorkspace() {
-    workspaceOpen.value = !workspaceOpen.value
+    const nextValue = !workspaceOpen.value
+    workspaceOpen.value = nextValue
+    if (nextValue && activeSessionId.value)
+      void loadSessionDetail(activeSessionId.value, { force: true, includeWorkspace: true })
   }
 
   function setWorkspaceOpen(value: boolean) {
     workspaceOpen.value = value
+    if (value && activeSessionId.value)
+      void loadSessionDetail(activeSessionId.value, { force: true, includeWorkspace: true })
   }
 
   function openNewAssistant() {
@@ -675,7 +717,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     runtimeRefreshInFlight = true
 
     try {
-      await loadSessionDetail(sessionId, { force: true })
+      await loadSessionDetail(sessionId, { force: true, includeWorkspace: false })
     }
     finally {
       runtimeRefreshInFlight = false
@@ -751,6 +793,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
   return {
     activeSurface,
     activeSession,
+    activeSessionLoading,
     activeSessionId,
     assistantModalMode,
     assistantTemplateKind,

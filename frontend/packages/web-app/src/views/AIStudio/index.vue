@@ -17,7 +17,7 @@ const route = useRoute()
 const router = useRouter()
 const aiStudioStore = useAIStudioStore()
 const routeDefaultSessionId = ''
-const { activeSession, activeSurface, assistantModalMode, assistantTemplateKind, editingAssistant, invitedAssistants, isActiveSessionPending, isAiTyping, newSessionAssistant, newSessionParticipantCandidates, showInviteAssistant, showNewAssistant, showNewSession, workspaceOpen } = storeToRefs(aiStudioStore)
+const { activeSession, activeSessionLoading, activeSurface, assistantModalMode, assistantTemplateKind, editingAssistant, invitedAssistants, isActiveSessionPending, isAiTyping, newSessionAssistant, newSessionParticipantCandidates, showInviteAssistant, showNewAssistant, showNewSession, workspaceOpen } = storeToRefs(aiStudioStore)
 const groupTemplateParticipants = computed(() => {
   const assistant = newSessionAssistant.value
   if (!assistant || assistant.status !== '群聊')
@@ -97,11 +97,11 @@ async function handleCreateSession(payload: {
   >
     <DiffuseLight height="100%" class="pointer-events-none absolute right-0 top-0 h-full w-full opacity-[0.32]" />
     <div class="pointer-events-none absolute inset-x-0 top-0 h-[240px] bg-[radial-gradient(circle_at_32%_0%,rgba(114,111,255,0.10),transparent_42%),linear-gradient(180deg,rgba(255,255,255,0.54)_0%,rgba(255,255,255,0)_100%)]" />
-    <div class="pointer-events-none absolute bottom-0 left-[12%] h-[240px] w-[240px] rounded-full bg-[radial-gradient(circle,rgba(114,111,255,0.08)_0%,rgba(114,111,255,0)_72%)] blur-2xl" />
+    <div class="pointer-events-none absolute bottom-0 left-[12%] h-[220px] w-[220px] rounded-full bg-[radial-gradient(circle,rgba(114,111,255,0.07)_0%,rgba(114,111,255,0)_72%)] blur-xl" />
 
     <div
       v-if="activeSession"
-      class="relative z-10 flex h-full min-h-0 min-w-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.44)_0%,rgba(255,255,255,0.14)_100%)]"
+      class="relative z-10 flex h-full min-h-0 min-w-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.38)_0%,rgba(255,255,255,0.12)_100%)]"
     >
       <template v-if="activeSurface === 'main'">
         <StudioChatPane
@@ -148,7 +148,7 @@ async function handleCreateSession(payload: {
       v-else
       class="flex h-full items-center justify-center text-sm text-black/42"
     >
-      AI 助手页面正在初始化...
+      {{ activeSessionLoading ? '正在切换会话...' : 'AI 助手页面正在初始化...' }}
     </div>
 
     <NewAssistantModal
