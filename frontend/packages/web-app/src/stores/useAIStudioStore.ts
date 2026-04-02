@@ -167,6 +167,16 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     return findAssistantById(assistantId)?.sessions.map(session => session.id) || []
   }
 
+  function findAssistantIdBySession(sessionId: string) {
+    for (const group of assistantGroups.value) {
+      for (const assistant of group.assistants) {
+        if (assistant.sessions.some(session => session.id === sessionId))
+          return assistant.id
+      }
+    }
+    return null
+  }
+
   function getFirstAvailableSessionId(preferredAssistantId?: string) {
     if (preferredAssistantId) {
       const preferredSessionId = getAssistantSessionIds(preferredAssistantId)[0]
@@ -205,19 +215,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     }))
   }
 
-  function markSessionActive(sessionId: string) {
-    assistantGroups.value = assistantGroups.value.map(group => ({
-      ...group,
-      assistants: group.assistants.map(assistant => ({
-        ...assistant,
-        sessions: assistant.sessions.map(session => ({
-          ...session,
-          active: session.id === sessionId,
-        })),
-      })),
-    }))
-  }
-
   async function refreshBootstrap(preferredSessionId = activeSessionId.value) {
     const bootstrap = await provider.getBootstrap()
     const nextGroups = cloneGroups(bootstrap.assistantGroups)
@@ -236,35 +233,36 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
 
     if (!sessionMap.value[nextSessionId])
       await loadSessionDetail(nextSessionId, { force: true, includeWorkspace: false })
-    markSessionActive(nextSessionId)
     return nextSessionId
   }
 
   function touchSession(sessionId: string) {
-    assistantGroups.value = assistantGroups.value.map(group => ({
-      ...group,
-      assistants: group.assistants.map(assistant => ({
-        ...assistant,
-        sessions: assistant.sessions.map(session => ({
-          ...session,
-          active: session.id === sessionId,
-          time: session.id === sessionId ? '刚刚' : session.time,
-        })),
-      })),
+    const assistantId = findAssistantIdBySession(sessionId)
+    if (!assistantId)
+      return
+
+    mutateAssistant(assistantId, assistant => ({
+      ...assistant,
+      sessions: assistant.sessions.map(session => (
+        session.id === sessionId
+          ? { ...session, time: '刚刚' }
+          : session
+      )),
     }))
   }
 
   function syncSessionTitle(sessionId: string, title: string) {
-    assistantGroups.value = assistantGroups.value.map(group => ({
-      ...group,
-      assistants: group.assistants.map(assistant => ({
-        ...assistant,
-        sessions: assistant.sessions.map(session => (
-          session.id === sessionId
-            ? { ...session, title }
-            : session
-        )),
-      })),
+    const assistantId = findAssistantIdBySession(sessionId)
+    if (!assistantId)
+      return
+
+    mutateAssistant(assistantId, assistant => ({
+      ...assistant,
+      sessions: assistant.sessions.map(session => (
+        session.id === sessionId
+          ? { ...session, title }
+          : session
+      )),
     }))
   }
 
@@ -289,7 +287,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
       const result = await task()
       const session = updateSessionDetail(result.session)
       touchSession(session.id)
-      markSessionActive(session.id)
       return session
     }
     catch (error) {
@@ -319,7 +316,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
       if (activeSessionId.value) {
         activeSessionLoading.value = true
         await loadSessionDetail(activeSessionId.value, { includeWorkspace: false })
-        markSessionActive(activeSessionId.value)
         activeSessionLoading.value = false
       }
     }
@@ -337,7 +333,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     workspaceOpen.value = false
     invitedAssistants.value = []
     isAiTyping.value = false
-    markSessionActive(activeSessionId.value)
     if (!activeSessionId.value)
       return
     if (sessionMap.value[activeSessionId.value])
@@ -532,19 +527,17 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
       id: createdDetail.id,
       title: createdDetail.headerTitle || title,
       time: '刚刚',
-      active: true,
     }
 
     mutateAssistant(targetAssistant.id, assistant => ({
       ...assistant,
-      sessions: [createdSession, ...assistant.sessions.map(item => ({ ...item, active: false }))],
+      sessions: [createdSession, ...assistant.sessions],
     }))
 
     activeSurface.value = 'main'
     activeSessionId.value = createdDetail.id
     workspaceOpen.value = false
     closeNewSession()
-    markSessionActive(createdDetail.id)
     return createdDetail.id
   }
 
@@ -643,7 +636,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
         messages: [...session.messages, optimisticMessage],
       }))
       touchSession(sessionId)
-      markSessionActive(sessionId)
       isAiTyping.value = true
     }
 

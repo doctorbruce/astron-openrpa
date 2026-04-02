@@ -30,6 +30,10 @@ type DesktopSkillState = {
   error: string | null
 }
 
+let cachedSkillCatalog: ManagedSkillRecord[] | null = null
+let cachedSkillsUnavailable = false
+let cachedSkillsError = ''
+
 const props = withDefaults(defineProps<{
   mode?: 'create' | 'edit'
   assistant?: StudioAssistant | null
@@ -158,6 +162,13 @@ async function loadSkills() {
     return
   }
 
+  if (cachedSkillCatalog) {
+    skillsUnavailable.value = cachedSkillsUnavailable
+    availableSkills.value = cachedSkillCatalog
+    skillsError.value = cachedSkillsError
+    return
+  }
+
   try {
     skillsLoading.value = true
     skillsError.value = ''
@@ -166,6 +177,9 @@ async function loadSkills() {
     availableSkills.value = result.skills
       .slice()
       .sort((left, right) => left.name.localeCompare(right.name, 'zh-Hans-CN'))
+    cachedSkillCatalog = availableSkills.value
+    cachedSkillsUnavailable = result.unavailable
+    cachedSkillsError = ''
   } catch (error) {
     skillsError.value = error instanceof Error ? error.message : '加载技能列表失败'
   } finally {
@@ -240,7 +254,7 @@ onMounted(() => {
           <textarea
             v-model="persona"
             rows="3"
-            class="w-full resize-none rounded-[16px] border-0 bg-[var(--ai-surface-soft)] px-3 py-2.5 text-[13px] leading-6 text-black/76 shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] outline-none transition-all placeholder:text-black/28 focus:ring-4 focus:ring-[var(--color-primary)]/8"
+            class="w-full resize-none rounded-[16px] border-0 bg-[var(--ai-surface-soft)] px-3 py-2.5 text-[13px] leading-6 text-black/76 shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] outline-none transition-colors placeholder:text-black/28 focus:ring-2 focus:ring-[var(--color-primary)]/8"
             :placeholder="isGroupTemplate ? '描述群聊模板的职责边界和适用任务' : '描述助手的身份、性格和行为准则'"
           />
         </div>
@@ -292,7 +306,7 @@ onMounted(() => {
           <textarea
             v-model="capabilities"
             rows="2"
-            class="w-full resize-none rounded-[16px] border-0 bg-[var(--ai-surface-soft)] px-3 py-2.5 text-[13px] leading-6 text-black/76 shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] outline-none transition-all placeholder:text-black/28 focus:ring-4 focus:ring-[var(--color-primary)]/8"
+            class="w-full resize-none rounded-[16px] border-0 bg-[var(--ai-surface-soft)] px-3 py-2.5 text-[13px] leading-6 text-black/76 shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] outline-none transition-colors placeholder:text-black/28 focus:ring-2 focus:ring-[var(--color-primary)]/8"
             :placeholder="isGroupTemplate ? '例如：跨财务与代码评审的联调协作' : '描述助手具备的核心能力'"
           />
         </div>

@@ -41,7 +41,7 @@ const searchQuery = ref('')
 const focusedAssistantId = ref('')
 const confirmingAssistantDeleteId = ref<string | null>(null)
 const createMenuAnchorRef = ref<HTMLElement | null>(null)
-const createMenuWidth = ref(224)
+const createMenuOpen = ref(false)
 
 const unifiedAssistants = computed<SidebarAssistantEntry[]>(() =>
   props.groups.flatMap(group =>
@@ -178,27 +178,44 @@ function cancelAssistantDeleteConfirm() {
   confirmingAssistantDeleteId.value = null
 }
 
-let createMenuResizeObserver: ResizeObserver | null = null
+function toggleCreateMenu() {
+  createMenuOpen.value = !createMenuOpen.value
+}
 
-function syncCreateMenuWidth() {
-  const width = createMenuAnchorRef.value?.getBoundingClientRect().width || 224
-  createMenuWidth.value = Math.min(Math.max(196, Math.round(width * 0.72)), 232)
+function closeCreateMenu() {
+  createMenuOpen.value = false
+}
+
+function handleCreateAssistant() {
+  closeCreateMenu()
+  emit('open-new-assistant')
+}
+
+function handleCreateGroupTemplate() {
+  closeCreateMenu()
+  emit('open-new-group-template')
+}
+
+function handleDocumentPointerDown(event: PointerEvent) {
+  if (!createMenuOpen.value)
+    return
+
+  const anchor = createMenuAnchorRef.value
+  if (!anchor)
+    return
+
+  if (anchor.contains(event.target as Node))
+    return
+
+  closeCreateMenu()
 }
 
 onMounted(() => {
-  syncCreateMenuWidth()
-  if (typeof ResizeObserver === 'undefined' || !createMenuAnchorRef.value)
-    return
-
-  createMenuResizeObserver = new ResizeObserver(() => {
-    syncCreateMenuWidth()
-  })
-  createMenuResizeObserver.observe(createMenuAnchorRef.value)
+  document.addEventListener('pointerdown', handleDocumentPointerDown)
 })
 
 onBeforeUnmount(() => {
-  createMenuResizeObserver?.disconnect()
-  createMenuResizeObserver = null
+  document.removeEventListener('pointerdown', handleDocumentPointerDown)
 })
 </script>
 
@@ -209,43 +226,39 @@ onBeforeUnmount(() => {
     style="font-family: var(--font-sans-ui);"
   >
     <div ref="createMenuAnchorRef" class="relative px-4 pb-3 pt-4">
-      <a-dropdown
-        :trigger="['click']"
-        placement="bottomCenter"
-        :destroy-popup-on-hide="true"
-        overlay-class-name="ai-sidebar-create-menu-overlay"
-        :overlay-style="{ width: `${createMenuWidth}px` }"
+      <Button
+        size="sm"
+        data-testid="template-create-trigger"
+        class="h-10 w-full justify-center gap-2 rounded-[15px] bg-[linear-gradient(135deg,#726FFF,#5D59FF)] px-4 text-[13px] font-semibold shadow-[0_8px_18px_rgba(114,111,255,0.18)] transition-colors hover:translate-y-0"
+        @click="toggleCreateMenu"
       >
-        <Button
-          size="sm"
-          data-testid="template-create-trigger"
-          class="h-10 w-full justify-center gap-2 rounded-[15px] bg-[linear-gradient(135deg,#726FFF,#5D59FF)] px-4 text-[13px] font-semibold shadow-[0_8px_18px_rgba(114,111,255,0.18)] transition-colors hover:translate-y-0"
-        >
-          <Plus class="h-4 w-4" />
-          <span>新建模板</span>
-        </Button>
-        <template #overlay>
-          <div class="w-full overflow-hidden rounded-[18px] bg-[linear-gradient(180deg,rgba(255,255,255,0.97)_0%,rgba(248,249,255,0.95)_100%)] p-2 shadow-[0_14px_28px_rgba(15,23,42,0.10)] backdrop-blur-[10px]">
-            <button
-              data-testid="create-assistant-template"
-              class="flex w-full appearance-none items-center gap-2 rounded-[14px] border-0 bg-transparent px-4 py-2.5 text-left transition-colors hover:bg-[rgba(114,111,255,0.08)]"
-              @click="emit('open-new-assistant')"
-            >
-              <Plus class="h-3.5 w-3.5 text-black/52" />
-              <span class="text-[12px] leading-4 text-black/74">新建助手模板</span>
-            </button>
-            <button
-              v-if="hasCollaborationAssistant"
-              data-testid="create-group-template"
-              class="mt-1 flex w-full appearance-none items-center gap-2 rounded-[14px] border-0 bg-transparent px-4 py-2.5 text-left transition-colors hover:bg-[rgba(114,111,255,0.08)]"
-              @click="emit('open-new-group-template')"
-            >
-              <Users class="h-3.5 w-3.5 text-[#5E5AE8]" />
-              <span class="text-[12px] leading-4 text-black/74">新建群聊模板</span>
-            </button>
-          </div>
-        </template>
-      </a-dropdown>
+        <Plus class="h-4 w-4" />
+        <span>新建模板</span>
+      </Button>
+      <div
+        v-if="createMenuOpen"
+        class="absolute inset-x-4 top-[calc(100%-2px)] z-20 pt-2"
+      >
+        <div class="w-full overflow-hidden rounded-[18px] bg-[linear-gradient(180deg,rgba(255,255,255,0.97)_0%,rgba(248,249,255,0.95)_100%)] p-2 shadow-[0_14px_28px_rgba(15,23,42,0.10)]">
+          <button
+            data-testid="create-assistant-template"
+            class="flex w-full appearance-none items-center gap-2 rounded-[14px] border-0 bg-transparent px-4 py-2.5 text-left transition-colors hover:bg-[rgba(114,111,255,0.08)]"
+            @click="handleCreateAssistant"
+          >
+            <Plus class="h-3.5 w-3.5 text-black/52" />
+            <span class="text-[12px] leading-4 text-black/74">新建助手模板</span>
+          </button>
+          <button
+            v-if="hasCollaborationAssistant"
+            data-testid="create-group-template"
+            class="mt-1 flex w-full appearance-none items-center gap-2 rounded-[14px] border-0 bg-transparent px-4 py-2.5 text-left transition-colors hover:bg-[rgba(114,111,255,0.08)]"
+            @click="handleCreateGroupTemplate"
+          >
+            <Users class="h-3.5 w-3.5 text-[#5E5AE8]" />
+            <span class="text-[12px] leading-4 text-black/74">新建群聊模板</span>
+          </button>
+        </div>
+      </div>
     </div>
 
     <div class="relative mb-3 flex min-h-0 flex-1 flex-col">
@@ -501,38 +514,4 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-:global(.ai-sidebar-create-menu-overlay) {
-  padding-top: 8px;
-}
-
-:global(.ai-sidebar-create-menu-overlay.ant-dropdown),
-:global(.ai-sidebar-create-menu-overlay .ant-dropdown),
-:global(.ai-sidebar-create-menu-overlay .ant-dropdown-content) {
-  border: none !important;
-  outline: none !important;
-  box-shadow: none !important;
-  background: transparent !important;
-}
-
-:global(.ai-sidebar-create-menu-overlay .ant-dropdown) {
-  box-shadow: none !important;
-}
-
-:global(.ai-sidebar-create-menu-overlay > div) {
-  border: none !important;
-  outline: none !important;
-}
-
-:global(.ai-sidebar-create-menu-overlay button) {
-  border: none !important;
-  outline: none !important;
-  box-shadow: none !important;
-}
-
-:global(.ai-sidebar-create-menu-overlay button:focus),
-:global(.ai-sidebar-create-menu-overlay button:focus-visible),
-:global(.ai-sidebar-create-menu-overlay button:active) {
-  outline: none !important;
-  box-shadow: none !important;
-}
 </style>

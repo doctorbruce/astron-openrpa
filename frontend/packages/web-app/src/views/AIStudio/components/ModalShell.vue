@@ -41,14 +41,14 @@ function handleBackdropClick() {
 <template>
   <div
     :data-testid="props.overlayTestId"
-    class="fixed inset-0 z-40 flex items-center justify-center bg-[rgba(15,23,42,0.22)] px-6 py-8 backdrop-blur-[4px]"
+    class="fixed inset-0 z-40 flex items-center justify-center bg-[rgba(15,23,42,0.16)] px-6 py-8"
     :class="props.overlayClass"
     @click.self="handleBackdropClick"
   >
     <div
       :data-testid="props.panelTestId"
       :class="[props.widthClass || 'w-[520px]', props.panelClass]"
-      class="max-h-[calc(100vh-110px)] overflow-hidden rounded-[26px] bg-[rgba(255,255,255,0.98)] shadow-[0_28px_90px_rgba(15,23,42,0.18)] backdrop-blur-[18px]"
+      class="max-h-[calc(100vh-110px)] overflow-hidden rounded-[26px] bg-[rgba(255,255,255,0.98)] shadow-[0_24px_64px_rgba(15,23,42,0.12)]"
     >
       <div
         :class="props.headerClass"
