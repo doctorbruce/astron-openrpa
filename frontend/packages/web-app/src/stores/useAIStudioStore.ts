@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { getOpencodeDesktopApi, opencodeAIStudioProvider } from '@/views/AIStudio/providers/opencodeProvider'
+import { applyStreamingTextDelta, applyStreamingTextPart } from './aiStudioStreaming'
 
 import type {
   AIStudioCardActionPayload,
@@ -16,6 +17,7 @@ import type {
   StudioMessage,
   StudioSession,
   StudioSessionDetail,
+  StudioSessionModelSelectionState,
 } from '@/views/AIStudio/types'
 
 const provider = opencodeAIStudioProvider
@@ -100,6 +102,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
   const errorMessage = ref('')
   const pendingMutation = ref<PendingMutation>(null)
   const isAiTyping = ref(false)
+  const sessionModelSelection = ref<StudioSessionModelSelectionState | null>(null)
   let runtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null
   let runtimeRefreshInFlight = false
   let queuedRuntimeRefreshSessionId: string | null = null
@@ -212,11 +215,13 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
 
     if (!nextSessionId) {
       sessionMap.value = {}
+      sessionModelSelection.value = null
       return null
     }
 
     if (!sessionMap.value[nextSessionId])
       await loadSessionDetail(nextSessionId, { force: true, includeWorkspace: false })
+    await loadSessionModelSelection(nextSessionId)
     return nextSessionId
   }
 
@@ -248,6 +253,19 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
           : session
       )),
     }))
+  }
+
+  async function loadSessionModelSelection(sessionId: string) {
+    if (!sessionId) {
+      sessionModelSelection.value = null
+      return null
+    }
+
+    const selection = await getOpencodeDesktopApi().getSessionModelSelection(sessionId) as StudioSessionModelSelectionState
+    if (activeSessionId.value === sessionId) {
+      sessionModelSelection.value = selection
+    }
+    return selection
   }
 
   async function loadSessionDetail(
@@ -300,7 +318,11 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
       if (activeSessionId.value) {
         activeSessionLoading.value = true
         await loadSessionDetail(activeSessionId.value, { includeWorkspace: false })
+        await loadSessionModelSelection(activeSessionId.value)
         activeSessionLoading.value = false
+      }
+      else {
+        sessionModelSelection.value = null
       }
     }
     catch (error) {
@@ -317,8 +339,11 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     workspaceOpen.value = false
     invitedAssistants.value = []
     isAiTyping.value = false
-    if (!activeSessionId.value)
+    if (!activeSessionId.value) {
+      sessionModelSelection.value = null
       return
+    }
+    void loadSessionModelSelection(activeSessionId.value)
     if (sessionMap.value[activeSessionId.value])
       return
 
@@ -335,6 +360,9 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
 
   function openSurface(surface: 'main' | 'automation' | 'settings') {
     activeSurface.value = surface
+    if (surface === 'main' && activeSessionId.value) {
+      void loadSessionModelSelection(activeSessionId.value)
+    }
   }
 
   function toggleWorkspace() {
@@ -568,6 +596,28 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     return refreshBootstrap(removedSessionIds.has(activeSessionId.value) ? '' : activeSessionId.value)
   }
 
+  async function saveSessionModelOverride(selection: { providerId: string, model: string }) {
+    if (!activeSessionId.value)
+      return null
+
+    const nextSelection = await getOpencodeDesktopApi().saveSessionModelOverride({
+      sessionID: activeSessionId.value,
+      providerId: selection.providerId,
+      model: selection.model,
+    }) as StudioSessionModelSelectionState
+    sessionModelSelection.value = nextSelection
+    return nextSelection
+  }
+
+  async function clearSessionModelOverride() {
+    if (!activeSessionId.value)
+      return null
+
+    const nextSelection = await getOpencodeDesktopApi().clearSessionModelOverride(activeSessionId.value) as StudioSessionModelSelectionState
+    sessionModelSelection.value = nextSelection
+    return nextSelection
+  }
+
   function selectArtifact(artifactId: string) {
     if (!activeSessionId.value)
       return
@@ -617,6 +667,8 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
       await provider.sendMessage({
         sessionId,
         ...payload,
+        providerId: sessionModelSelection.value?.effective?.providerId ?? null,
+        model: sessionModelSelection.value?.effective?.model ?? null,
       })
       return sessionMap.value[sessionId] || null
     }
@@ -793,6 +845,41 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
         const status = event.properties.status as { type: string } | undefined
         if (status?.type === 'busy') isAiTyping.value = true
       }
+      else if (event.type === 'message.part.delta') {
+        const messageId = event.properties.messageID as string | undefined
+        const partId = event.properties.partID as string | undefined
+        const field = event.properties.field as string | undefined
+        const delta = event.properties.delta as string | undefined
+
+        if (messageId && partId && field && delta && sessionMap.value[eventSessionId]) {
+          mutateSessionDetail(eventSessionId, session =>
+            applyStreamingTextDelta(session, {
+              messageId,
+              partId,
+              field,
+              delta,
+            }),
+          )
+          if (field === 'text')
+            isAiTyping.value = false
+        }
+      }
+      else if (event.type === 'message.part.updated') {
+        const part = event.properties.part as { type?: string, messageID?: string, text?: string } | undefined
+        if (part?.type === 'text' && part.messageID && typeof part.text === 'string' && sessionMap.value[eventSessionId]) {
+          mutateSessionDetail(eventSessionId, session =>
+            applyStreamingTextPart(session, {
+              messageId: part.messageID!,
+              text: part.text ?? '',
+            }),
+          )
+          if (part.text.trim())
+            isAiTyping.value = false
+        }
+        else {
+          scheduleRuntimeSessionRefresh(eventSessionId)
+        }
+      }
       else if (event.type === 'session.error') {
         isAiTyping.value = false
         const runtimeError = event.properties.error as { data?: { message?: string } } | undefined
@@ -806,8 +893,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
       else if (
         event.type === 'message.updated'
         || event.type === 'message.removed'
-        || event.type === 'message.part.updated'
-        || event.type === 'message.part.delta'
         || event.type === 'message.part.removed'
         || event.type === 'session.updated'
         || event.type === 'session.created'
@@ -831,6 +916,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     createAssistant,
     deleteAssistant,
     deleteSession,
+    clearSessionModelOverride,
     editingAssistant,
     ensureInitialized,
     errorMessage,
@@ -850,9 +936,11 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     openSurface,
     pendingMutation,
     renameSession,
+    saveSessionModelOverride,
     selectArtifact,
     sendMessage,
     sessionMap,
+    sessionModelSelection,
     setActiveSession,
     setWorkspaceOpen,
     showInviteAssistant,

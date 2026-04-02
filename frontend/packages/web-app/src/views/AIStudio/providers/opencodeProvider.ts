@@ -14,6 +14,7 @@ import type { StudioMessageAttachment } from '../types'
 export type OpencodeDesktopApi = {
   getBootstrap: () => Promise<AIStudioBootstrap>
   getSession: (sessionId: string, options?: { includeWorkspace?: boolean }) => Promise<unknown>
+  getSessionModelSelection: (sessionID: string) => Promise<unknown>
   createSession: (payload: { title?: string | null; assistantId?: string | null; groupRoomId?: string | null; workspacePath?: string | null }) => Promise<{ id: string }>
   renameSession: (payload: { sessionId: string; title?: string | null }) => Promise<{ success: boolean }>
   deleteSession: (sessionId: string) => Promise<{ success: boolean }>
@@ -21,6 +22,7 @@ export type OpencodeDesktopApi = {
     sessionID: string
     text: string
     system?: string | null
+    mentions?: string[]
     attachments?: Array<{
       id: string
       name: string
@@ -30,6 +32,8 @@ export type OpencodeDesktopApi = {
     model?: string | null
     providerId?: string | null
   }) => Promise<{ success: boolean }>
+  saveSessionModelOverride: (input: { sessionID: string; providerId: string; model: string }) => Promise<unknown>
+  clearSessionModelOverride: (sessionID: string) => Promise<unknown>
   abortSession: (sessionId: string) => Promise<{ success: boolean }>
   listAssistants: () => Promise<unknown[]>
   saveAssistant: (input: unknown) => Promise<unknown>
@@ -110,7 +114,10 @@ export const opencodeAIStudioProvider: AIStudioProvider = {
       sessionID: payload.sessionId,
       text: payload.content.trim(),
       system: skillReminder || undefined,
+      mentions: payload.mentions,
       attachments: payload.attachments?.map(toDesktopAttachment),
+      model: payload.model ?? null,
+      providerId: payload.providerId ?? null,
     })
   },
 

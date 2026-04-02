@@ -9,6 +9,7 @@ describe('buildRuntimeConfigContent workspace prompts', () => {
         version: 1,
         providers: {},
         defaultModel: null,
+        mcp: {},
       },
       [
         {
@@ -50,5 +51,36 @@ describe('buildRuntimeConfigContent workspace prompts', () => {
     expect(parsed.agent['assistant-direct-assistant-1']?.prompt).toContain('soft application-level workspace constraint')
     expect(parsed.agent['room-coordinator-group-1']?.prompt).toContain('Workspace root: D:/Workspaces/groups/review')
     expect(parsed.agent['room-coordinator-group-1']?.prompt).toContain('Use this workspace root for shared room artifacts')
+  })
+
+  it('preserves configured mcp server names in runtime config', () => {
+    const content = buildRuntimeConfigContent({
+      version: 1,
+      providers: {},
+      defaultModel: null,
+      mcp: {
+        'custom-api': {
+          type: 'remote',
+          url: 'https://example.com/mcp',
+          enabled: true,
+        },
+        'this-is-a-very-long-mcp-server-name-used-for-configuration-display': {
+          type: 'remote',
+          url: 'https://example.com/another-mcp',
+          enabled: true,
+        },
+      },
+    })
+
+    const parsed = JSON.parse(content) as {
+      mcp: Record<string, { url: string }>
+    }
+
+    const runtimeNames = Object.keys(parsed.mcp)
+    expect(runtimeNames).toHaveLength(2)
+    expect(runtimeNames).toContain('custom-api')
+    expect(runtimeNames).toContain('this-is-a-very-long-mcp-server-name-used-for-configuration-display')
+    expect(Object.values(parsed.mcp).map(item => item.url)).toContain('https://example.com/mcp')
+    expect(Object.values(parsed.mcp).map(item => item.url)).toContain('https://example.com/another-mcp')
   })
 })

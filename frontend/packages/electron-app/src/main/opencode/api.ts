@@ -1,4 +1,5 @@
 import type { OpencodeMessageRecord, OpencodeSessionInfo, OpencodeSessionStatus } from '../../shared/sessions'
+import type { DesktopMcpServerStatus } from '../../shared/settings'
 import { buildPromptRequestBody, type CreateSessionInput, type SendMessageInput } from '../../shared/runtime'
 import type { SidecarManager } from './sidecar'
 
@@ -7,6 +8,9 @@ export type RuntimeApi = {
   getSession: (sessionID: string, directory?: string | null) => Promise<OpencodeSessionInfo>
   getSessionMessages: (sessionID: string, directory?: string | null) => Promise<OpencodeMessageRecord[]>
   getSessionStatuses: () => Promise<Record<string, OpencodeSessionStatus>>
+  getMcpStatus: () => Promise<Record<string, DesktopMcpServerStatus>>
+  connectMcpServer: (name: string) => Promise<void>
+  disconnectMcpServer: (name: string) => Promise<void>
   disposeGlobal: () => Promise<void>
   createSession: (input: CreateSessionInput) => Promise<OpencodeSessionInfo>
   deleteSession: (sessionID: string, directory?: string | null) => Promise<void>
@@ -23,6 +27,13 @@ export function createRuntimeApi(runtime: Pick<SidecarManager, 'getConnection'>)
     getSessionMessages: (sessionID, directory) =>
       requestJson<OpencodeMessageRecord[]>(`/session/${encodeURIComponent(sessionID)}/message`, { directory }),
     getSessionStatuses: () => requestJson<Record<string, OpencodeSessionStatus>>('/session/status'),
+    getMcpStatus: () => requestJson<Record<string, DesktopMcpServerStatus>>('/mcp'),
+    connectMcpServer: async (name) => {
+      await requestVoid(`/mcp/${encodeURIComponent(name)}/connect`, { method: 'POST' })
+    },
+    disconnectMcpServer: async (name) => {
+      await requestVoid(`/mcp/${encodeURIComponent(name)}/disconnect`, { method: 'POST' })
+    },
     disposeGlobal: async () => {
       await requestVoid('/global/dispose', { method: 'POST' })
     },

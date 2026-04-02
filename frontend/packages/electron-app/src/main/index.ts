@@ -40,11 +40,13 @@ const sidecar = createSidecarManager({
         managedSkillPaths: skills.storageRoot ? [skills.storageRoot] : [],
       })
       try {
-        const parsed = JSON.parse(configContent) as { agent?: Record<string, unknown>; skills?: { paths?: string[] } }
+        const parsed = JSON.parse(configContent) as { agent?: Record<string, unknown>; skills?: { paths?: string[] }; mcp?: Record<string, unknown> }
         logger.info('built opencode runtime config content', {
           assistantCount: assistants.length,
           groupRoomCount: groupRooms.length,
           skillCount: skills.skills.length,
+          mcpCount: Object.keys(parsed.mcp || {}).length,
+          mcpKeys: Object.keys(parsed.mcp || {}).slice(0, 24),
           agentKeys: Object.keys(parsed.agent || {}).slice(0, 24),
           skillPaths: parsed.skills?.paths || [],
         })

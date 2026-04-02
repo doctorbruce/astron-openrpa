@@ -16,7 +16,7 @@ import {
   WandSparkles,
   X,
 } from 'lucide-vue-next'
-import { computed, nextTick, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 
 import { utilsManager } from '@/platform'
 import { Button } from '@/components/ui/button'
@@ -26,10 +26,11 @@ import StudioChatCardRenderer from './StudioChatCardRenderer.vue'
 import MarkdownMessage from './MarkdownMessage.vue'
 import MessageActions from './MessageActions.vue'
 
-import type { StudioChatCard, StudioMessage, StudioMessageAttachment, StudioSessionDetail } from '../types'
+import type { StudioChatCard, StudioMessage, StudioMessageAttachment, StudioSessionDetail, StudioSessionModelSelectionState } from '../types'
 
 const props = defineProps<{
   session: StudioSessionDetail
+  sessionModelSelection?: StudioSessionModelSelectionState | null
   workspaceOpen: boolean
   invitedAssistants: string[]
   availableSkills: ComposerSkillOption[]
@@ -48,6 +49,8 @@ const emit = defineEmits<{
   (e: 'submit-param', payload: { cardId: string, values: Record<string, string> }): void
   (e: 'submit-action', payload: { cardId: string, actionId: string }): void
   (e: 'rename-session', payload: { sessionId: string, title: string }): void
+  (e: 'select-session-model', payload: { providerId: string, model: string }): void
+  (e: 'clear-session-model'): void
   (e: 'toggle-workspace'): void
 }>()
 
@@ -128,6 +131,7 @@ const localAttachments = ref<ComposerAttachment[]>([])
 const textareaRef = ref<HTMLTextAreaElement | null>(null)
 const titleInputRef = ref<HTMLInputElement | null>(null)
 const timelineEndRef = ref<HTMLElement | null>(null)
+const modelMenuRef = ref<HTMLElement | null>(null)
 const activeTrigger = ref<ComposerTriggerState | null>(null)
 const activeMenuIndex = ref(0)
 const dismissedTriggerSignature = ref('')
@@ -136,6 +140,7 @@ const taskProgressExpanded = ref(false)
 const editingSessionTitle = ref(false)
 const sessionTitleDraft = ref('')
 const pendingAutoScroll = ref(false)
+const modelMenuOpen = ref(false)
 
 const displayedMessages = computed(() => props.session.messages)
 const displayedTimeline = computed(() => {
@@ -163,6 +168,33 @@ const mentionOptions = computed(() => props.mentionOptions || [])
 const displayedAttachments = computed(() => localAttachments.value)
 const canSend = computed(() => draft.value.trim().length > 0 || displayedAttachments.value.length > 0)
 const canAbort = computed(() => props.sessionPending || !!props.isAiTyping)
+const sessionModelOptions = computed(() => props.sessionModelSelection?.options || [])
+const activeSessionModel = computed(() => props.sessionModelSelection?.effective || null)
+const hasSessionModelOverride = computed(() => Boolean(props.sessionModelSelection?.override))
+const sessionModelSourceLabel = computed(() => {
+  if (props.sessionModelSelection?.source === 'session')
+    return '会话模型'
+  if (props.sessionModelSelection?.source === 'assistant')
+    return '助手默认'
+  if (props.sessionModelSelection?.source === 'global')
+    return '全局默认'
+  return '未设置'
+})
+const activeSessionModelLabel = computed(() => {
+  if (!activeSessionModel.value)
+    return '跟随默认'
+
+  const matched = sessionModelOptions.value.find(option =>
+    option.providerId === activeSessionModel.value?.providerId && option.model === activeSessionModel.value?.model,
+  )
+  return matched?.label || `${activeSessionModel.value.providerId} / ${activeSessionModel.value.model}`
+})
+const streamingContentSignature = computed(() =>
+  (props.session.chatCards || [])
+    .filter((card): card is Extract<StudioChatCard, { type: 'text' }> => card.type === 'text')
+    .map(card => `${card.id}:${card.content.length}`)
+    .join('|'),
+)
 const composerInteractive = computed(() =>
   isComposerFocused.value
   || !!activeTrigger.value
@@ -286,6 +318,7 @@ watch(
     activeMenuIndex.value = 0
     dismissedTriggerSignature.value = ''
     taskProgressExpanded.value = false
+    modelMenuOpen.value = false
     await nextTick()
     resizeTextarea()
   },
@@ -315,24 +348,49 @@ watch(draft, async () => {
   resizeTextarea()
 })
 
+function handleModelMenuPointerDown(event: PointerEvent) {
+  if (!modelMenuOpen.value)
+    return
+  const target = event.target as Node | null
+  if (target && modelMenuRef.value?.contains(target))
+    return
+  modelMenuOpen.value = false
+}
+
+onMounted(() => {
+  document.addEventListener('pointerdown', handleModelMenuPointerDown)
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', handleModelMenuPointerDown)
+})
+
 watch(activeMenuOptions, (options) => {
   if (activeMenuIndex.value >= options.length)
     activeMenuIndex.value = 0
 })
 
 watch(
-  () => [displayedTimeline.value.length, props.isAiTyping ? 1 : 0],
-  ([nextLength, nextTyping], [prevLength, prevTyping]) => {
+  () => [displayedTimeline.value.length, props.isAiTyping ? 1 : 0, streamingContentSignature.value],
+  ([nextLength, nextTyping, nextSignature], [prevLength, prevTyping, prevSignature]) => {
+    const nextTypingValue = Number(nextTyping)
+    const prevTypingValue = Number(prevTyping)
+    const hasNewTimelineItem = nextLength > prevLength
+    const typingActivated = nextTypingValue > prevTypingValue
+    const streamingContentUpdated = nextSignature !== prevSignature
+
+    if (nextTypingValue > 0 && streamingContentUpdated) {
+      void scheduleScrollToBottom('auto')
+      return
+    }
+
     if (!pendingAutoScroll.value)
       return
-
-    const hasNewTimelineItem = nextLength > prevLength
-    const typingActivated = nextTyping > prevTyping
 
     if (!hasNewTimelineItem && !typingActivated)
       return
 
-    pendingAutoScroll.value = false
+    pendingAutoScroll.value = nextTypingValue > 0
     void scheduleScrollToBottom('smooth')
   },
   { flush: 'post' },
@@ -545,6 +603,22 @@ function onSessionTitleKeydown(event: KeyboardEvent) {
     event.preventDefault()
     cancelRenamingSession()
   }
+}
+
+function toggleModelMenu() {
+  if (props.sessionPending || !sessionModelOptions.value.length)
+    return
+  modelMenuOpen.value = !modelMenuOpen.value
+}
+
+function selectSessionModel(providerId: string, model: string) {
+  modelMenuOpen.value = false
+  emit('select-session-model', { providerId, model })
+}
+
+function clearSessionModel() {
+  modelMenuOpen.value = false
+  emit('clear-session-model')
 }
 
 function skillButtonActive() {
@@ -920,7 +994,7 @@ function onDraftKeydown(event: KeyboardEvent) {
   <section class="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(255,255,255,0.24)_0%,rgba(250,251,255,0.34)_100%)]" style="font-family: var(--font-sans-ui);">
     <template v-if="isGroupSession()">
       <div class="shrink-0 px-4 pb-2 pt-3">
-        <div data-testid="chat-header-shell" class="overflow-hidden rounded-[18px] bg-[rgba(255,255,255,0.54)] shadow-[0_8px_24px_rgba(15,23,42,0.022)] backdrop-blur-[10px]">
+        <div data-testid="chat-header-shell" class="relative isolate z-20 overflow-visible rounded-[18px] bg-[rgba(255,255,255,0.54)] shadow-[0_8px_24px_rgba(15,23,42,0.022)] backdrop-blur-[10px]">
           <div class="flex items-center justify-between px-4 py-3">
             <div class="flex items-center gap-3">
               <div class="relative h-8 w-10 shrink-0">
@@ -974,6 +1048,52 @@ function onDraftKeydown(event: KeyboardEvent) {
               </div>
             </div>
             <div class="flex items-center gap-2">
+              <div ref="modelMenuRef" class="relative">
+                <button
+                  data-testid="session-model-trigger"
+                  class="flex items-center gap-1.5 rounded-full bg-[rgba(255,255,255,0.72)] px-2.5 py-1.5 transition-colors hover:bg-[rgba(255,255,255,0.94)] disabled:cursor-not-allowed disabled:opacity-60"
+                  :disabled="!sessionModelOptions.length || sessionPending"
+                  @click="toggleModelMenu"
+                >
+                  <span class="max-w-[220px] truncate text-xs leading-4 text-black/62">{{ activeSessionModelLabel }}</span>
+                  <span class="rounded-full bg-[#F3F4F6] px-1.5 py-0.5 text-[10px] font-medium leading-3 text-[#6B7280]">{{ sessionModelSourceLabel }}</span>
+                  <ChevronDown class="h-3.5 w-3.5 text-black/34 transition-transform" :class="modelMenuOpen ? 'rotate-180' : ''" />
+                </button>
+                <div
+                  v-if="modelMenuOpen"
+                  class="absolute right-0 top-[calc(100%+8px)] z-50 w-[320px] overflow-hidden rounded-[18px] border border-[rgba(224,229,242,0.96)] bg-white p-1.5 shadow-[0_22px_48px_rgba(15,23,42,0.16)]"
+                >
+                  <div class="px-3 pb-1.5 pt-1.5 text-[10px] font-medium leading-4 text-black/38">会话模型</div>
+                  <button
+                    class="mb-1.5 flex w-full items-center justify-between rounded-[14px] border px-3 py-2.5 text-left transition-all"
+                    :class="hasSessionModelOverride ? 'border-[rgba(114,111,255,0.18)] bg-[rgba(114,111,255,0.06)] text-[#5E5AE8] hover:bg-[rgba(114,111,255,0.1)]' : 'cursor-default border-[rgba(224,229,242,0.9)] bg-[#F8FAFC] text-black/30'"
+                    :disabled="!hasSessionModelOverride"
+                    @click="clearSessionModel"
+                  >
+                    <span class="min-w-0 flex-1">
+                      <span class="block text-[12px] font-medium leading-4">恢复默认</span>
+                      <span class="mt-1 block text-[10px] leading-4 text-black/40">跟随助手默认或全局默认模型</span>
+                    </span>
+                    <span class="shrink-0 text-[10px] font-medium leading-4">{{ hasSessionModelOverride ? '点击恢复' : '当前已是默认' }}</span>
+                  </button>
+                  <div class="mb-1 h-px bg-[rgba(224,229,242,0.9)]" />
+                  <button
+                    v-for="option in sessionModelOptions"
+                    :key="`${option.providerId}:${option.model}`"
+                    class="flex w-full items-center gap-3 rounded-[14px] px-3 py-2.5 text-left transition-all duration-150"
+                    :class="activeSessionModel?.providerId === option.providerId && activeSessionModel?.model === option.model ? 'bg-[rgba(114,111,255,0.10)] text-[#5E5AE8]' : 'text-black/68 hover:bg-white/78 hover:text-black/82'"
+                    @click="selectSessionModel(option.providerId, option.model)"
+                  >
+                    <div class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2" :class="activeSessionModel?.providerId === option.providerId && activeSessionModel?.model === option.model ? 'border-[#726FFF]' : 'border-[#D6D9E4]'">
+                      <div v-if="activeSessionModel?.providerId === option.providerId && activeSessionModel?.model === option.model" class="h-1.5 w-1.5 rounded-full bg-[#726FFF]" />
+                    </div>
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-[12px] font-medium leading-4">{{ option.model }}</span>
+                      <span class="mt-1 block truncate text-[10px] leading-4 text-black/40">{{ option.providerLabel }}</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
               <div
                 v-if="session.collaborationSummary"
                 class="rounded-full bg-[rgba(255,255,255,0.72)] px-2.5 py-1 text-[10px] leading-3 text-black/52"
@@ -1034,7 +1154,7 @@ function onDraftKeydown(event: KeyboardEvent) {
 
     <template v-else>
       <div class="shrink-0 px-4 pb-2 pt-3">
-        <div data-testid="chat-header-shell" class="flex items-center justify-between rounded-[18px] bg-[rgba(255,255,255,0.54)] px-4 py-3 shadow-[0_8px_24px_rgba(15,23,42,0.022)] backdrop-blur-[10px]">
+        <div data-testid="chat-header-shell" class="relative isolate z-20 flex items-center justify-between overflow-visible rounded-[18px] bg-[rgba(255,255,255,0.54)] px-4 py-3 shadow-[0_8px_24px_rgba(15,23,42,0.022)] backdrop-blur-[10px]">
           <div class="flex items-center gap-2.5">
             <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-[#EEF2FF] text-xs font-semibold text-[#726FFF]">{{ session.headerBadge }}</div>
             <div class="flex items-center gap-1.5">
@@ -1067,11 +1187,57 @@ function onDraftKeydown(event: KeyboardEvent) {
                 </div>
               </div>
             </div>
-          </div>
-          <div class="flex items-center gap-2">
-            <button data-testid="workspace-trigger" class="flex items-center gap-1.5 rounded-full bg-[rgba(255,255,255,0.72)] px-2.5 py-1.5 transition-colors hover:bg-[rgba(255,255,255,0.94)]" @click="emit('toggle-workspace')">
-              <FolderOpen class="h-3.5 w-3.5" :class="workspaceOpen ? 'text-[#726FFF]' : 'text-black/46'" />
-              <span class="text-xs leading-4" :class="workspaceOpen ? 'text-[#726FFF]' : 'text-black/58'">工作空间</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <div ref="modelMenuRef" class="relative">
+                <button
+                  data-testid="session-model-trigger"
+                  class="flex items-center gap-1.5 rounded-full bg-[rgba(255,255,255,0.72)] px-2.5 py-1.5 transition-colors hover:bg-[rgba(255,255,255,0.94)] disabled:cursor-not-allowed disabled:opacity-60"
+                  :disabled="!sessionModelOptions.length || sessionPending"
+                  @click="toggleModelMenu"
+                >
+                  <span class="max-w-[220px] truncate text-xs leading-4 text-black/62">{{ activeSessionModelLabel }}</span>
+                  <span class="rounded-full bg-[#F3F4F6] px-1.5 py-0.5 text-[10px] font-medium leading-3 text-[#6B7280]">{{ sessionModelSourceLabel }}</span>
+                  <ChevronDown class="h-3.5 w-3.5 text-black/34 transition-transform" :class="modelMenuOpen ? 'rotate-180' : ''" />
+                </button>
+                <div
+                  v-if="modelMenuOpen"
+                  class="absolute right-0 top-[calc(100%+8px)] z-50 w-[320px] overflow-hidden rounded-[18px] border border-[rgba(224,229,242,0.96)] bg-white p-1.5 shadow-[0_22px_48px_rgba(15,23,42,0.16)]"
+                >
+                  <div class="px-3 pb-1.5 pt-1.5 text-[10px] font-medium leading-4 text-black/38">会话模型</div>
+                  <button
+                    class="mb-1.5 flex w-full items-center justify-between rounded-[14px] border px-3 py-2.5 text-left transition-all"
+                    :class="hasSessionModelOverride ? 'border-[rgba(114,111,255,0.18)] bg-[rgba(114,111,255,0.06)] text-[#5E5AE8] hover:bg-[rgba(114,111,255,0.1)]' : 'cursor-default border-[rgba(224,229,242,0.9)] bg-[#F8FAFC] text-black/30'"
+                    :disabled="!hasSessionModelOverride"
+                    @click="clearSessionModel"
+                  >
+                    <span class="min-w-0 flex-1">
+                      <span class="block text-[12px] font-medium leading-4">恢复默认</span>
+                      <span class="mt-1 block text-[10px] leading-4 text-black/40">跟随助手默认或全局默认模型</span>
+                    </span>
+                    <span class="shrink-0 text-[10px] font-medium leading-4">{{ hasSessionModelOverride ? '点击恢复' : '当前已是默认' }}</span>
+                  </button>
+                  <div class="mb-1 h-px bg-[rgba(224,229,242,0.9)]" />
+                  <button
+                    v-for="option in sessionModelOptions"
+                    :key="`${option.providerId}:${option.model}`"
+                    class="flex w-full items-center gap-3 rounded-[14px] px-3 py-2.5 text-left transition-all duration-150"
+                    :class="activeSessionModel?.providerId === option.providerId && activeSessionModel?.model === option.model ? 'bg-[rgba(114,111,255,0.10)] text-[#5E5AE8]' : 'text-black/68 hover:bg-white/78 hover:text-black/82'"
+                    @click="selectSessionModel(option.providerId, option.model)"
+                  >
+                    <div class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2" :class="activeSessionModel?.providerId === option.providerId && activeSessionModel?.model === option.model ? 'border-[#726FFF]' : 'border-[#D6D9E4]'">
+                      <div v-if="activeSessionModel?.providerId === option.providerId && activeSessionModel?.model === option.model" class="h-1.5 w-1.5 rounded-full bg-[#726FFF]" />
+                    </div>
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-[12px] font-medium leading-4">{{ option.model }}</span>
+                      <span class="mt-1 block truncate text-[10px] leading-4 text-black/40">{{ option.providerLabel }}</span>
+                    </span>
+                  </button>
+                </div>
+              </div>
+              <button data-testid="workspace-trigger" class="flex items-center gap-1.5 rounded-full bg-[rgba(255,255,255,0.72)] px-2.5 py-1.5 transition-colors hover:bg-[rgba(255,255,255,0.94)]" @click="emit('toggle-workspace')">
+                <FolderOpen class="h-3.5 w-3.5" :class="workspaceOpen ? 'text-[#726FFF]' : 'text-black/46'" />
+                <span class="text-xs leading-4" :class="workspaceOpen ? 'text-[#726FFF]' : 'text-black/58'">工作空间</span>
             </button>
             <button class="flex items-center gap-1.5 rounded-full bg-[rgba(240,239,255,0.88)] px-2.5 py-1.5 transition-colors hover:bg-[#F0EFFF]" @click="emit('open-invite')">
               <UserPlus class="h-3.5 w-3.5 text-[#726FFF]" />

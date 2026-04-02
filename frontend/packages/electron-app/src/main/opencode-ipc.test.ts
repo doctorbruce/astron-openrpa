@@ -161,7 +161,7 @@ describe('registerOpencodeIpc send message workspace context', () => {
     const saveGroupRoomHandler = ipcHandle.mock.calls.find(([channel]) => channel === IPC_OPENCODE_SAVE_GROUP_ROOM)?.[1]
     const deleteGroupRoomHandler = ipcHandle.mock.calls.find(([channel]) => channel === IPC_OPENCODE_DELETE_GROUP_ROOM)?.[1]
 
-    await saveProviderHandler({}, { providerId: 'openai' })
+    await saveProviderHandler({}, { providerType: 'openai' })
     await saveDefaultModelHandler({}, { providerId: 'openai', model: 'gpt-4.1' })
     await saveAssistantHandler({}, { name: 'Code Assistant' })
     await deleteAssistantHandler({}, 'assistant-1')

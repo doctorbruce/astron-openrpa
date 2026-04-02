@@ -56,6 +56,7 @@ describe('toStudioAssistantGroups', () => {
         time: { created: 1, updated: 2 },
       } as any,
       [],
+      { type: 'idle' },
       'Code Assistant',
       'C',
       {
@@ -76,5 +77,59 @@ describe('toStudioAssistantGroups', () => {
     expect(detail.artifacts).toEqual([
       { id: 'artifact-1', name: 'summary.md', summary: 'Generated summary', tag: '宸ヤ綔绌洪棿鏂囦欢', tagTone: 'neutral' },
     ])
+  })
+
+  it('normalizes stale running tool calls to failed when session is idle', () => {
+    const detail = toStudioSessionDetail(
+      {
+        id: 'session-running-stale',
+        slug: 'stale-run',
+        projectID: 'project-1',
+        directory: 'C:/Users/test',
+        title: 'Stale Tool State',
+        version: '1.0.0',
+        time: { created: 1, updated: 2 },
+      } as any,
+      [
+        {
+          info: {
+            id: 'assistant-msg-1',
+            sessionID: 'session-running-stale',
+            role: 'assistant',
+            time: { created: Date.now() - 1000 },
+            parentID: 'user-msg-1',
+            modelID: 'test-model',
+            providerID: 'test-provider',
+            mode: 'default',
+            agent: 'assistant-direct-assistant-1',
+            path: { cwd: 'C:/Users/test', root: 'C:/Users/test' },
+            cost: 0,
+          },
+          parts: [
+            {
+              id: 'tool-1',
+              sessionID: 'session-running-stale',
+              messageID: 'assistant-msg-1',
+              type: 'tool',
+              callID: 'call-1',
+              tool: 'glob',
+              state: {
+                status: 'running',
+                input: { pattern: '**/*mcp*' },
+                time: { start: Date.now() - 1000 },
+              },
+            },
+          ],
+        },
+      ] as any,
+      { type: 'idle' },
+      'Test Assistant',
+      'T',
+    )
+
+    const toolCard = detail.chatCards.find(card => card.type === 'tool-call-list')
+    expect(toolCard && toolCard.type === 'tool-call-list' ? toolCard.calls[0]?.status : undefined).toBe('failed')
+    expect(toolCard && toolCard.type === 'tool-call-list' ? toolCard.calls[0]?.result : undefined).toContain('执行已结束')
+    expect(detail.headerTag).toBe('空闲')
   })
 })

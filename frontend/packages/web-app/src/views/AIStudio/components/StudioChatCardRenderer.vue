@@ -1052,7 +1052,10 @@ function resolveArtifactPreview(card: Extract<StudioChatCard, { type: 'artifact-
     <template v-else>
       <div class="flex flex-col gap-1">
         <div class="rounded-t-[18px] rounded-br-[18px] rounded-bl-[6px] bg-[rgba(255,255,255,0.64)] px-4 py-3 shadow-[0_6px_14px_rgba(15,23,42,0.04)]">
-          <MarkdownMessage :content="card.content" tone="assistant" />
+          <div v-if="card.streaming" class="whitespace-pre-wrap break-words text-[13px] leading-6 text-black/78">
+            {{ card.content }}
+          </div>
+          <MarkdownMessage v-else :content="card.content" tone="assistant" />
         </div>
         <MessageActions
           :message-id="card.id"

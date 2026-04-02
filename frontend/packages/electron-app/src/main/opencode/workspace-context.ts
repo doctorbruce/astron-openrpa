@@ -4,6 +4,7 @@ import type {
   GroupRoomRecord,
   GroupRoomSessionRecord,
 } from '../../shared/assistants'
+import type { DesktopMcpServerStatus } from '../../shared/settings'
 
 export type SessionMessageContext = {
   agent?: string | null
@@ -12,6 +13,11 @@ export type SessionMessageContext = {
 
 export type SessionWorkspaceContext = {
   workspacePath?: string | null
+}
+
+type DesktopMcpServerSummary = {
+  name: string
+  enabled: boolean
 }
 
 export function buildAssistantDirectAgentName(assistantId: string) {
@@ -64,13 +70,14 @@ export function resolveSessionMessageContext(
   assistantSessions: AssistantSessionRecord[],
   groupRoomSessions: GroupRoomSessionRecord[],
 ): SessionMessageContext {
+  const interactionGuard = buildInteractionGuardPrompt()
   const groupSession = groupRoomSessions.find((session) => session.runtimeSessionId === sessionID)
   if (groupSession) {
     const room = groupRooms.find((item) => item.id === groupSession.groupRoomId)
     if (room) {
       return {
         agent: buildRoomCoordinatorAgentName(room.id),
-        system: buildGroupWorkspacePrompt(room) ?? null,
+        system: appendPromptSection(buildGroupWorkspacePrompt(room), interactionGuard) ?? null,
       }
     }
   }
@@ -81,12 +88,14 @@ export function resolveSessionMessageContext(
     if (assistant) {
       return {
         agent: buildAssistantDirectAgentName(assistant.id),
-        system: buildAssistantWorkspacePrompt(assistant) ?? null,
+        system: appendPromptSection(buildAssistantWorkspacePrompt(assistant), interactionGuard) ?? null,
       }
     }
   }
 
-  return {}
+  return {
+    system: interactionGuard,
+  }
 }
 
 export function resolveSessionWorkspaceContext(
@@ -109,6 +118,114 @@ export function resolveSessionWorkspaceContext(
   }
 
   return {}
+}
+
+export function buildMcpAvailabilityPrompt(
+  servers: DesktopMcpServerSummary[],
+  statuses: Record<string, DesktopMcpServerStatus>,
+) {
+  if (!servers.length) {
+    return [
+      'Current MCP runtime snapshot: no MCP servers are configured.',
+      'When the user asks what MCP services are available now, answer strictly from this snapshot.',
+    ].join('\n')
+  }
+
+  const connected: string[] = []
+  const disconnected: string[] = []
+  const unavailable: string[] = []
+
+  for (const server of servers) {
+    const runtimeStatus = statuses[server.name]
+
+    if (!server.enabled) {
+      unavailable.push(`${server.name} (disabled)`)
+      continue
+    }
+
+    if (!runtimeStatus) {
+      disconnected.push(server.name)
+      continue
+    }
+
+    if (runtimeStatus.status === 'connected') {
+      connected.push(server.name)
+      continue
+    }
+
+    if (runtimeStatus.status === 'disabled') {
+      disconnected.push(server.name)
+      continue
+    }
+
+    if (runtimeStatus.status === 'failed') {
+      unavailable.push(`${server.name} (failed)`)
+      continue
+    }
+
+    if (runtimeStatus.status === 'needs_auth') {
+      unavailable.push(`${server.name} (needs auth)`)
+      continue
+    }
+
+    unavailable.push(`${server.name} (needs client registration)`)
+  }
+
+  const lines = ['Current MCP runtime snapshot for this request (authoritative):']
+  lines.push(`Connected MCP servers: ${connected.length ? connected.join(', ') : 'none'}`)
+  lines.push(`Disconnected MCP servers: ${disconnected.length ? disconnected.join(', ') : 'none'}`)
+  lines.push(`Unavailable MCP servers: ${unavailable.length ? unavailable.join(', ') : 'none'}`)
+  lines.push('When the user asks which MCP services are available now, answer strictly from this snapshot.')
+  lines.push('Do not claim that disconnected, failed, unauthenticated, or disabled MCP servers are currently available.')
+  lines.push('Do not list individual MCP tool names for a disconnected or unavailable server.')
+  return lines.join('\n')
+}
+
+export function buildGroupMentionPrompt(
+  mentionedAssistantIds: string[],
+  room: Pick<GroupRoomRecord, 'name' | 'memberAssistantIds'> | null,
+  assistants: Pick<AssistantRecord, 'id' | 'name'>[],
+) {
+  if (!room || mentionedAssistantIds.length === 0) {
+    return null
+  }
+
+  const roomMemberIds = new Set(room.memberAssistantIds)
+  const assistantsById = new Map(assistants.map(assistant => [assistant.id, assistant]))
+  const mentionedMembers = [...new Set(mentionedAssistantIds)]
+    .filter(id => roomMemberIds.has(id))
+    .map((id) => {
+      const assistant = assistantsById.get(id)
+      if (!assistant) {
+        return null
+      }
+
+      return {
+        name: assistant.name,
+        workerAgent: buildAssistantWorkerAgentName(id),
+      }
+    })
+    .filter((value): value is { name: string, workerAgent: string } => Boolean(value))
+
+  if (mentionedMembers.length === 0) {
+    return null
+  }
+
+  const lines = [
+    `The user explicitly mentioned these room members in ${room.name}:`,
+  ]
+
+  for (const member of mentionedMembers) {
+    lines.push(`- ${member.name} via subagent ${member.workerAgent}`)
+  }
+
+  lines.push('Treat an explicit @mention as a routing instruction, not a weak preference.')
+  lines.push('When one or more members are explicitly mentioned, you should delegate to the mentioned member first before answering on your own, unless delegation is impossible.')
+  lines.push('For direct checks like greetings, availability, or requests addressed to a specific mentioned member, let that mentioned member answer first through the task tool.')
+  lines.push('Do not answer in place of an explicitly mentioned member unless the delegation fails or the user is asking for room-level coordination instead.')
+  lines.push('When using the task tool, prefer the corresponding subagent types listed above.')
+
+  return lines.join('\n')
 }
 
 function buildWorkspaceInstructions(input: {
@@ -141,4 +258,13 @@ function buildWorkspaceInstructions(input: {
   lines.push('If the user asks to work outside this workspace, explicitly acknowledge that you are leaving the assigned workspace before proceeding.')
 
   return lines.join('\n')
+}
+
+function buildInteractionGuardPrompt() {
+  return [
+    'When the user is asking about available capabilities, tools, MCP servers, skills, or how something works, answer conversationally first.',
+    'Do not run bash, MCP tools, skill tools, or other execution tools just to demonstrate that they exist.',
+    'Only invoke a tool when the user clearly asks you to execute, test, connect, inspect live external state, or make changes.',
+    'If the request is ambiguous, ask one short clarifying question instead of running tools.',
+  ].join('\n')
 }

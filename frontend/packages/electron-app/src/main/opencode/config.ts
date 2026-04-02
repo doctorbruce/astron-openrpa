@@ -1,6 +1,6 @@
 import type { AssistantRecord, GroupRoomRecord, OpencodeSkillRecord } from '../../shared/assistants'
 import { getProviderDefinition } from '../../shared/provider-registry'
-import { SETTINGS_SCHEMA_URL, type PersistedAppSettings } from '../../shared/settings'
+import { SETTINGS_SCHEMA_URL, type PersistedAppSettings, type PersistedMcpServerConfig } from '../../shared/settings'
 import {
   appendPromptSection,
   buildAssistantDirectAgentName,
@@ -46,13 +46,13 @@ export function buildRuntimeConfigContent(
         return result
       }
 
-      const definition = getProviderDefinition(providerId)
+      const definition = getProviderDefinition(providerSettings.providerType)
       if (!definition || definition.status !== 'ready') {
         return result
       }
 
       if (definition.adapter === 'openai-compatible') {
-        if (!providerSettings.baseUrl || !providerSettings.model) {
+        if (!providerSettings.baseUrl || !providerSettings.models.length) {
           return result
         }
 
@@ -63,9 +63,7 @@ export function buildRuntimeConfigContent(
             apiKey: providerSettings.apiKey,
             baseURL: providerSettings.baseUrl,
           },
-          models: {
-            [providerSettings.model]: { name: providerSettings.model },
-          },
+          models: Object.fromEntries(providerSettings.models.map(model => [model, { name: model }])),
         }
         return result
       }
@@ -108,6 +106,11 @@ export function buildRuntimeConfigContent(
     ...(settings.defaultModel
       ? { model: `${settings.defaultModel.providerId}/${settings.defaultModel.model}` }
       : {}),
+    ...(Object.keys(settings.mcp || {}).length > 0
+      ? {
+          mcp: buildRuntimeMcpConfig(settings.mcp),
+        }
+      : {}),
     ...(options.managedSkillPaths?.length
       ? {
           skills: {
@@ -120,6 +123,35 @@ export function buildRuntimeConfigContent(
   }
 
   return JSON.stringify(config)
+}
+
+function buildRuntimeMcpConfig(configs: PersistedAppSettings['mcp']) {
+  return Object.entries(configs).reduce<Record<string, Record<string, unknown>>>((result, [name, config]) => {
+    result[name] = toRuntimeMcpConfig(config)
+    return result
+  }, {})
+}
+
+function toRuntimeMcpConfig(config: PersistedMcpServerConfig) {
+  if (config.type === 'local') {
+    return {
+      type: 'local',
+      command: config.command,
+      ...(config.environment && Object.keys(config.environment).length ? { environment: config.environment } : {}),
+      ...(typeof config.enabled === 'boolean' ? { enabled: config.enabled } : {}),
+      ...(typeof config.timeout === 'number' ? { timeout: config.timeout } : {}),
+    }
+  }
+
+  return {
+    type: 'remote',
+    url: config.url,
+    ...(config.headers && Object.keys(config.headers).length ? { headers: config.headers } : {}),
+    ...(config.oauth === false ? { oauth: false } : {}),
+    ...(config.oauth && config.oauth !== false ? { oauth: config.oauth } : {}),
+    ...(typeof config.enabled === 'boolean' ? { enabled: config.enabled } : {}),
+    ...(typeof config.timeout === 'number' ? { timeout: config.timeout } : {}),
+  }
 }
 
 function buildAssistantAgentBase(

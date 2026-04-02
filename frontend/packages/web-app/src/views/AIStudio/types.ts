@@ -5,6 +5,21 @@ export interface StudioSession {
   active?: boolean
 }
 
+export interface StudioSessionModelOption {
+  providerId: string
+  providerLabel: string
+  model: string
+  label: string
+}
+
+export interface StudioSessionModelSelectionState {
+  sessionID: string
+  override: { providerId: string, model: string } | null
+  effective: { providerId: string, model: string } | null
+  source: 'session' | 'assistant' | 'global' | 'none'
+  options: StudioSessionModelOption[]
+}
+
 export type StudioSessionStatus = 'idle' | 'running' | 'waiting-confirm' | 'completed' | 'failed'
 export type StudioRunStatus = 'queued' | 'running' | 'waiting-input' | 'waiting-approval' | 'completed' | 'failed' | 'cancelled'
 export type StudioRunSyncMode = 'poll' | 'sse'
@@ -303,6 +318,7 @@ export type StudioChatCard =
     type: 'text'
     content: string
     tone?: 'default' | 'subtle'
+    streaming?: boolean
   })
   | (StudioChatCardBase & {
     type: 'draft-review'

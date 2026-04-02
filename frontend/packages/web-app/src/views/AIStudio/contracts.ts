@@ -18,6 +18,8 @@ export interface AIStudioSendMessagePayload {
   attachments?: StudioMessageAttachment[]
   mentions?: string[]
   skills?: string[]
+  model?: string | null
+  providerId?: string | null
 }
 
 export interface AIStudioCreateSessionPayload {

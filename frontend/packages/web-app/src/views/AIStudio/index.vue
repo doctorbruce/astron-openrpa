@@ -12,7 +12,7 @@ import DiffuseLight from '@/components/Illustration/DiffuseLight.vue'
 import { useAIStudioStore } from '@/stores/useAIStudioStore'
 
 const aiStudioStore = useAIStudioStore()
-const { activeSession, activeSessionLoading, activeSurface, assistantGroups, assistantModalMode, assistantTemplateKind, editingAssistant, invitedAssistants, isActiveSessionPending, isAiTyping, newSessionParticipantCandidates, showInviteAssistant, showNewAssistant, workspaceOpen } = storeToRefs(aiStudioStore)
+const { activeSession, activeSessionLoading, activeSurface, assistantGroups, assistantModalMode, assistantTemplateKind, editingAssistant, invitedAssistants, isActiveSessionPending, isAiTyping, newSessionParticipantCandidates, sessionModelSelection, showInviteAssistant, showNewAssistant, workspaceOpen } = storeToRefs(aiStudioStore)
 const assistantOptionCatalog = computed(() =>
   assistantGroups.value.flatMap(group => group.assistants.map(assistant => ({
     id: assistant.id,
@@ -111,6 +111,7 @@ async function handleAssistantSubmit(payload: {
       <template v-if="activeSurface === 'main'">
         <StudioChatPane
           :available-skills="composerSkillOptions"
+          :session-model-selection="sessionModelSelection"
           :mention-options="composerMentionOptions"
           :invited-assistants="invitedAssistants"
           :session="activeSession"
@@ -122,6 +123,8 @@ async function handleAssistantSubmit(payload: {
           @open-invite="aiStudioStore.openInviteAssistant()"
           @abort-session="aiStudioStore.abortSession()"
           @rename-session="aiStudioStore.renameSession($event.sessionId, $event.title)"
+          @select-session-model="aiStudioStore.saveSessionModelOverride($event)"
+          @clear-session-model="aiStudioStore.clearSessionModelOverride()"
           @send-message="aiStudioStore.sendMessage($event)"
           @submit-action="aiStudioStore.submitCardAction($event)"
           @submit-choice="aiStudioStore.submitChoiceForm($event)"
@@ -141,6 +144,7 @@ async function handleAssistantSubmit(payload: {
       <template v-else>
         <StudioChatPane
           :available-skills="composerSkillOptions"
+          :session-model-selection="sessionModelSelection"
           :mention-options="composerMentionOptions"
           :invited-assistants="invitedAssistants"
           :session="activeSession"
@@ -151,16 +155,13 @@ async function handleAssistantSubmit(payload: {
           class="pointer-events-none opacity-30 blur-[1px]"
           @abort-session="aiStudioStore.abortSession()"
           @rename-session="aiStudioStore.renameSession($event.sessionId, $event.title)"
+          @select-session-model="aiStudioStore.saveSessionModelOverride($event)"
+          @clear-session-model="aiStudioStore.clearSessionModelOverride()"
         />
         <SettingsCenterView @close="handleCloseSurface" />
       </template>
     </div>
-    <div
-      v-else
-      class="flex h-full items-center justify-center text-sm text-black/42"
-    >
-      {{ activeSessionLoading ? '正在切换会话...' : 'AI 助手页面正在初始化...' }}
-    </div>
+    <div v-else class="relative z-10 h-full" />
 
     <NewAssistantModal
       v-if="showNewAssistant"

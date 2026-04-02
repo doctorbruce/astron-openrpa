@@ -54,6 +54,8 @@ export type StudioMessage = {
   attachments?: StudioMessageAttachment[]
   time?: string
   assistantName?: string
+  originRole?: 'coordinator' | 'participant' | 'system'
+  participantAssistantId?: string
   order?: number
 }
 
@@ -79,7 +81,10 @@ export type StudioChatCard =
       type: 'text'
       content: string
       tone?: 'default' | 'subtle'
+      streaming?: boolean
+      assistantId?: string
       assistantName?: string
+      assistantBadge?: string
       time?: string
       order?: number
     }
@@ -89,7 +94,9 @@ export type StudioChatCard =
       title?: string
       summary?: string
       calls: StudioToolCall[]
+      assistantId?: string
       assistantName?: string
+      assistantBadge?: string
       time?: string
       order?: number
     }
@@ -112,10 +119,13 @@ export type StudioWorkspaceFile = {
 export type StudioSessionDetail = {
   id: string
   mode?: 'regular' | 'group'
+  status?: 'idle' | 'running'
   headerTitle: string
   headerTag: string
   headerBadge: string
   assistantName: string
+  participantAssistantIds?: string[]
+  collaborationMode?: 'auto' | 'pipeline' | 'race' | 'debate'
   messages: StudioMessage[]
   chatCards: StudioChatCard[]
   workspaceFiles: StudioWorkspaceFile[]
@@ -226,6 +236,40 @@ function summarizeSyntheticFileContext(textParts: OpencodeTextPart[], targetPath
   const suffix = lineCount > 0 ? `，共 ${lineCount} 行` : ''
   const typeLabel = match.fileType ? `${match.fileType} ` : ''
   return `已读取${typeLabel}${name}${suffix}`
+}
+
+function extractTaskResultText(output: string) {
+  const match = output.match(/<task_result>\s*([\s\S]*?)\s*<\/task_result>/i)
+  if (!match)
+    return null
+
+  const text = match[1]?.trim() || ''
+  return text || null
+}
+
+function shouldSuppressCoordinatorRelayText(
+  text: string,
+  participantNames: string[],
+  extractedTaskResults: string[],
+) {
+  const normalized = text.trim()
+  if (!normalized || extractedTaskResults.length === 0) {
+    return false
+  }
+
+  if (/^.{1,40}(回复|回应)[:：]\s*/u.test(normalized)) {
+    return true
+  }
+
+  if (/^(我帮你问了|我替你问了|让我来转达|以下是.*回复)/u.test(normalized)) {
+    return true
+  }
+
+  if (participantNames.some(name => normalized.startsWith(`${name} 回复：`) || normalized.startsWith(`${name} 回应：`))) {
+    return true
+  }
+
+  return extractedTaskResults.some(result => normalized === result || normalized.endsWith(result))
 }
 
 function getAssistantBadge(assistant: AssistantRecord): string {
@@ -373,11 +417,21 @@ export function toStudioSessionDetail(
   sessionStatus: OpencodeSessionStatus | undefined,
   assistantName: string = 'AI 助手',
   assistantBadge: string = 'AI',
+  sessionMeta?: {
+    mode?: 'regular' | 'group'
+    participantAssistantIds?: string[]
+    participantAssistants?: Array<{ id: string, name: string, badge: string }>
+    collaborationMode?: 'auto' | 'pipeline' | 'race' | 'debate'
+  },
   workspaceSnapshot?: StudioWorkspaceSnapshot,
 ): StudioSessionDetail {
+  const sessionIsBusy = sessionStatus?.type === 'busy'
   const messages: StudioMessage[] = []
   const chatCards: StudioChatCard[] = []
   let seq = 0
+  const participantAssistantsById = new Map(
+    (sessionMeta?.participantAssistants || []).map(participant => [participant.id, participant]),
+  )
 
   const sorted = messageRecords
     .slice()
@@ -434,6 +488,11 @@ export function toStudioSessionDetail(
     if (info.role === 'assistant') {
       const assistantMsg = info as OpencodeAssistantMessage
       const timeStr = formatRelativeTime(info.time.created)
+      const participantAssistantId = extractParticipantAssistantId(assistantMsg.agent)
+      const participantMeta = participantAssistantId ? participantAssistantsById.get(participantAssistantId) : undefined
+      const resolvedAssistantId = participantMeta?.id
+      const resolvedAssistantName = participantMeta?.name || assistantName
+      const resolvedAssistantBadge = participantMeta?.badge || assistantBadge
 
       const toolParts = parts.filter((p): p is OpencodeToolPart => p.type === 'tool')
       const textParts = parts.filter((p): p is OpencodeTextPart => {
@@ -441,6 +500,7 @@ export function toStudioSessionDetail(
         if (toolParts.length > 0 && isToolNarrationText(p.text)) return false
         return true
       })
+      const extractedTaskResults: string[] = []
 
       if (toolParts.length > 0) {
         const calls: StudioToolCall[] = toolParts.map((tp) => {
@@ -450,13 +510,29 @@ export function toStudioSessionDetail(
 
           let toolStatus: StudioToolCall['status'] = 'pending'
           let result: string | undefined
+          const staleToolResult = assistantMsg.error?.data?.message?.trim() || '执行已结束，但未收到工具完成状态。'
 
           if (tp.state.status === 'completed') {
             toolStatus = 'done'
             result = tp.state.output
           }
           else if (tp.state.status === 'running') {
-            toolStatus = 'running'
+            if (sessionIsBusy) {
+              toolStatus = 'running'
+            }
+            else {
+              toolStatus = 'failed'
+              result = staleToolResult
+            }
+          }
+          else if (tp.state.status === 'pending') {
+            if (sessionIsBusy) {
+              toolStatus = 'pending'
+            }
+            else {
+              toolStatus = 'failed'
+              result = staleToolResult
+            }
           }
           else if (tp.state.status === 'error') {
             toolStatus = 'failed'
@@ -481,19 +557,64 @@ export function toStudioSessionDetail(
           id: `${assistantMsg.id}-tools`,
           type: 'tool-call-list',
           calls,
-          assistantName,
+          assistantId: resolvedAssistantId,
+          assistantName: resolvedAssistantName,
+          assistantBadge: resolvedAssistantBadge,
           time: timeStr,
           order: seq++,
         })
+
+        for (const [index, toolPart] of toolParts.entries()) {
+          if (toolPart.tool !== 'task' || toolPart.state.status !== 'completed')
+            continue
+
+          const subagentType = typeof toolPart.state.input?.subagent_type === 'string'
+            ? toolPart.state.input.subagent_type.trim()
+            : ''
+          const taskParticipantAssistantId = extractParticipantAssistantId(subagentType)
+          if (!taskParticipantAssistantId)
+            continue
+
+          const taskParticipantMeta = participantAssistantsById.get(taskParticipantAssistantId)
+          if (!taskParticipantMeta)
+            continue
+
+          const taskResultText = extractTaskResultText(toolPart.state.output)
+          if (!taskResultText)
+            continue
+
+          extractedTaskResults.push(taskResultText)
+
+          chatCards.push({
+            id: `${assistantMsg.id}-task-participant-${index}`,
+            type: 'text',
+            content: taskResultText,
+            assistantId: taskParticipantMeta.id,
+            assistantName: taskParticipantMeta.name,
+            assistantBadge: taskParticipantMeta.badge,
+            time: timeStr,
+            order: seq++,
+          })
+        }
       }
 
       const combinedText = textParts.map((p) => p.text).join('\n').trim()
-      if (combinedText) {
+      const shouldHideCoordinatorRelay = sessionMeta?.mode === 'group'
+        && resolvedAssistantId === undefined
+        && shouldSuppressCoordinatorRelayText(
+          combinedText,
+          [...participantAssistantsById.values()].map(item => item.name),
+          extractedTaskResults,
+        )
+
+      if (combinedText && !shouldHideCoordinatorRelay) {
         chatCards.push({
           id: assistantMsg.id,
           type: 'text',
           content: combinedText,
-          assistantName,
+          assistantId: resolvedAssistantId,
+          assistantName: resolvedAssistantName,
+          assistantBadge: resolvedAssistantBadge,
           time: timeStr,
           order: seq++,
         })
@@ -506,7 +627,9 @@ export function toStudioSessionDetail(
           type: 'text',
           content: `执行失败：${errorText}`,
           tone: 'subtle',
-          assistantName,
+          assistantId: resolvedAssistantId,
+          assistantName: resolvedAssistantName,
+          assistantBadge: resolvedAssistantBadge,
           time: timeStr,
           order: seq++,
         })
@@ -515,21 +638,35 @@ export function toStudioSessionDetail(
   }
 
   const derivedStatus = sessionStatus?.type === 'busy' ? 'running' : 'idle'
-  const headerTag = derivedStatus === 'running' ? '运行中' : '空闲'
+  const isGroupSession = sessionMeta?.mode === 'group'
+  const headerTag = isGroupSession
+    ? '群聊'
+    : (derivedStatus === 'running' ? '运行中' : '空闲')
 
   return {
     id: session.id,
-    mode: 'regular',
+    mode: isGroupSession ? 'group' : 'regular',
     status: derivedStatus,
     headerTitle: session.title || '未命名会话',
     headerTag,
     headerBadge: assistantBadge,
     assistantName,
+    participantAssistantIds: isGroupSession ? [...(sessionMeta?.participantAssistantIds || [])] : undefined,
+    collaborationMode: isGroupSession ? sessionMeta?.collaborationMode : undefined,
     workspacePath: workspaceSnapshot?.workspacePath || session.directory,
-    inputPlaceholder: `向 ${assistantName} 发送消息…`,
+    inputPlaceholder: isGroupSession ? `向群聊 ${assistantName} 发送消息…` : `向 ${assistantName} 发送消息…`,
     messages,
     chatCards,
     workspaceFiles: workspaceSnapshot?.workspaceFiles ? [...workspaceSnapshot.workspaceFiles] : [],
     artifacts: workspaceSnapshot?.artifacts ? [...workspaceSnapshot.artifacts] : [],
   }
+}
+
+function extractParticipantAssistantId(agentName: string) {
+  const prefix = 'assistant-worker-'
+  if (!agentName.startsWith(prefix)) {
+    return null
+  }
+  const id = agentName.slice(prefix.length).trim()
+  return id || null
 }

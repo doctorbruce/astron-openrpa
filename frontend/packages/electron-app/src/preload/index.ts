@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld('opencodeApi', {
     sessionID: string
     text: string
     system?: string | null
+    mentions?: string[]
     attachments?: Array<{
       id: string
       name: string
@@ -83,8 +84,16 @@ contextBridge.exposeInMainWorld('opencodeApi', {
   }) =>
     ipcRenderer.invoke('opencode:sendMessage', payload),
   getSettings: () => ipcRenderer.invoke('opencode:getSettings'),
+  getSessionModelSelection: (sessionID: string) => ipcRenderer.invoke('opencode:getSessionModelSelection', sessionID),
+  listMcpStatus: () => ipcRenderer.invoke('opencode:listMcpStatus'),
   saveProvider: (input: unknown) => ipcRenderer.invoke('opencode:saveProvider', input),
   saveDefaultModel: (input: unknown) => ipcRenderer.invoke('opencode:saveDefaultModel', input),
+  saveSessionModelOverride: (input: { sessionID: string; providerId: string; model: string }) => ipcRenderer.invoke('opencode:saveSessionModelOverride', input),
+  clearSessionModelOverride: (sessionID: string) => ipcRenderer.invoke('opencode:clearSessionModelOverride', sessionID),
+  saveMcpServer: (input: unknown) => ipcRenderer.invoke('opencode:saveMcpServer', input),
+  deleteMcpServer: (name: string) => ipcRenderer.invoke('opencode:deleteMcpServer', name),
+  connectMcpServer: (name: string) => ipcRenderer.invoke('opencode:connectMcpServer', name),
+  disconnectMcpServer: (name: string) => ipcRenderer.invoke('opencode:disconnectMcpServer', name),
   listAssistants: () => ipcRenderer.invoke('opencode:listAssistants'),
   saveAssistant: (input: unknown) => ipcRenderer.invoke('opencode:saveAssistant', input),
   deleteAssistant: (id: string) => ipcRenderer.invoke('opencode:deleteAssistant', id),

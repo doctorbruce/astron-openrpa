@@ -14,6 +14,8 @@ import {
   IPC_OPENCODE_GET_RUNTIME_STATUS,
   IPC_OPENCODE_GET_SESSION,
   IPC_OPENCODE_GET_SETTINGS,
+  IPC_OPENCODE_GET_SESSION_MODEL_SELECTION,
+  IPC_OPENCODE_LIST_MCP_STATUS,
   IPC_OPENCODE_LIST_ASSISTANTS,
   IPC_OPENCODE_LIST_GROUP_ROOMS,
   IPC_OPENCODE_LIST_SKILLS,
@@ -23,8 +25,14 @@ import {
   IPC_OPENCODE_RUNTIME_EVENT,
   IPC_OPENCODE_SAVE_ASSISTANT,
   IPC_OPENCODE_SAVE_DEFAULT_MODEL,
+  IPC_OPENCODE_SAVE_SESSION_MODEL_OVERRIDE,
   IPC_OPENCODE_SAVE_GROUP_ROOM,
+  IPC_OPENCODE_SAVE_MCP_SERVER,
   IPC_OPENCODE_SAVE_PROVIDER,
+  IPC_OPENCODE_CLEAR_SESSION_MODEL_OVERRIDE,
+  IPC_OPENCODE_DELETE_MCP_SERVER,
+  IPC_OPENCODE_CONNECT_MCP_SERVER,
+  IPC_OPENCODE_DISCONNECT_MCP_SERVER,
   IPC_OPENCODE_SEND_MESSAGE,
 } from './opencode/constants'
 import type { SidecarManager } from './opencode/sidecar'
@@ -41,8 +49,10 @@ import {
 } from './opencode/adapter'
 import { createLogger } from './opencode/logging'
 import { scanWorkspaceArtifacts } from './opencode/workspace-scan'
-import { appendPromptSection, resolveSessionMessageContext, resolveSessionWorkspaceContext } from './opencode/workspace-context'
+import { appendPromptSection, buildGroupMentionPrompt, buildMcpAvailabilityPrompt, resolveSessionMessageContext, resolveSessionWorkspaceContext } from './opencode/workspace-context'
 import type { DesktopRuntimeEvent } from '../shared/sessions'
+import type { SaveMcpServerInput } from '../shared/settings'
+import type { DesktopSettings, ModelSelection, SessionModelOption, SessionModelSelectionState } from '../shared/settings'
 import type {
   AssistantRecord,
   AssistantSessionRecord,
@@ -50,6 +60,7 @@ import type {
   GroupRoomSessionRecord,
 } from '../shared/assistants'
 import type { OpencodeSessionInfo } from '../shared/sessions'
+import { getProviderDefinition } from '../shared/provider-registry'
 
 type OpencodeIpcDeps = {
   sidecar: SidecarManager
@@ -106,7 +117,24 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
     runtimeConfigDirty = false
     logger.info('restarted sidecar to apply updated opencode config')
   }
+  const applyRuntimeConfigChange = async (reason: string) => {
+    const runtimeStatus = sidecar.getStatus()
+    if (runtimeStatus.phase !== 'ready') {
+      markRuntimeConfigDirty(reason)
+      return
+    }
 
+    const statuses = await api.getSessionStatuses().catch(() => ({}))
+    const hasBusySession = Object.values(statuses).some(status => status?.type === 'busy')
+    if (hasBusySession) {
+      markRuntimeConfigDirty(reason)
+      return
+    }
+
+    await sidecar.restart()
+    runtimeConfigDirty = false
+    logger.info('restarted sidecar to apply updated opencode config', { reason })
+  }
   eventStream.subscribe((event: DesktopRuntimeEvent) => {
     sessionStore.applyEvent(event)
     broadcastToAllWindows(IPC_OPENCODE_RUNTIME_EVENT, event)
@@ -254,6 +282,11 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       ...session,
       title: sessionBinding.title || session.title,
     }, messages, statuses[sessionId], sessionBinding.assistantName, sessionBinding.assistantBadge, {
+      mode: sessionBinding.mode,
+      participantAssistantIds: sessionBinding.participantAssistantIds,
+      participantAssistants: sessionBinding.participantAssistants,
+      collaborationMode: sessionBinding.collaborationMode,
+    }, {
       workspacePath,
       workspaceFiles: workspaceSnapshot.workspaceFiles,
       artifacts: workspaceSnapshot.artifacts,
@@ -304,6 +337,7 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
     await Promise.all([
       assistantStore.detachRuntimeSession(sessionId),
       assistantStore.detachGroupRoomSession(sessionId),
+      settingsStore.clearSessionModelOverride(sessionId),
     ])
     return { success: true }
   })
@@ -333,6 +367,7 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       payload: {
         sessionID: string
         text: string
+        mentions?: string[]
         attachments?: Array<{
           id: string
           name: string
@@ -348,6 +383,7 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
         sessionID: payload.sessionID,
         runtimeConfigDirty,
         textPreview: payload.text.slice(0, 120),
+        mentionCount: payload.mentions?.length || 0,
         attachmentCount: payload.attachments?.length || 0,
       })
       await ensureFreshRuntimeConfig()
@@ -356,6 +392,11 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
         assistantStore.listGroupRooms(),
         assistantStore.listAssistantSessions(),
         assistantStore.listGroupRoomSessions(),
+      ])
+      const [settings, storedSettings, mcpStatuses] = await Promise.all([
+        settingsStore.getSettings(),
+        settingsStore.getStoredSettings(),
+        api.getMcpStatus().catch(() => ({})),
       ])
       const context = resolveSessionMessageContext(
         payload.sessionID,
@@ -378,15 +419,52 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
         hasPayloadSystemPrompt: Boolean(payload.system?.trim()),
         workspacePath: workspaceContext.workspacePath?.trim() || null,
       })
+      const sessionModelSelection = resolveSessionModelSelectionState(
+        payload.sessionID,
+        assistants,
+        assistantSessions,
+        storedSettings,
+        settings,
+      )
+      const resolvedProviderId = payload.providerId ?? sessionModelSelection.effective?.providerId ?? null
+      const resolvedModel = payload.model ?? sessionModelSelection.effective?.model ?? null
+      const groupSession = groupRoomSessions.find((session) => session.runtimeSessionId === payload.sessionID)
+      const groupRoom = groupSession
+        ? groupRooms.find((room) => room.id === groupSession.groupRoomId) ?? null
+        : null
+      const mentionPrompt = buildGroupMentionPrompt(payload.mentions || [], groupRoom, assistants)
+      logger.info('resolved session model selection', {
+        sessionID: payload.sessionID,
+        source: sessionModelSelection.source,
+        override: sessionModelSelection.override,
+        effective: sessionModelSelection.effective,
+        requestedProviderId: payload.providerId ?? null,
+        requestedModel: payload.model ?? null,
+        resolvedProviderId,
+        resolvedModel,
+      })
+      logger.info('resolved group mention context', {
+        sessionID: payload.sessionID,
+        groupRoomId: groupRoom?.id ?? null,
+        mentions: payload.mentions ?? [],
+        hasMentionPrompt: Boolean(mentionPrompt),
+      })
+      const mcpAvailabilityPrompt = buildMcpAvailabilityPrompt(settings.mcpServers, mcpStatuses)
       await api.sendMessage({
         sessionID: payload.sessionID,
         text: payload.text,
         directory: workspaceContext.workspacePath?.trim() || null,
         attachments: payload.attachments,
-        model: payload.model ?? null,
-        providerId: payload.providerId ?? null,
+        model: resolvedModel,
+        providerId: resolvedProviderId,
         agent: context.agent ?? null,
-        system: appendPromptSection(payload.system ?? null, context.system ?? null) ?? null,
+        system: appendPromptSection(
+          appendPromptSection(
+            appendPromptSection(payload.system ?? null, context.system ?? null) ?? null,
+            mentionPrompt,
+          ) ?? null,
+          mcpAvailabilityPrompt,
+        ) ?? null,
       })
       return { success: true }
     },
@@ -394,6 +472,27 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
 
   ipcMain.handle(IPC_OPENCODE_GET_SETTINGS, async () => {
     return settingsStore.getSettings()
+  })
+
+  ipcMain.handle(IPC_OPENCODE_GET_SESSION_MODEL_SELECTION, async (_event, sessionID: string) => {
+    const [assistants, assistantSessions, storedSettings, settings] = await Promise.all([
+      assistantStore.listAssistants(),
+      assistantStore.listAssistantSessions(),
+      settingsStore.getStoredSettings(),
+      settingsStore.getSettings(),
+    ])
+
+    return resolveSessionModelSelectionState(
+      sessionID,
+      assistants,
+      assistantSessions,
+      storedSettings,
+      settings,
+    )
+  })
+
+  ipcMain.handle(IPC_OPENCODE_LIST_MCP_STATUS, async () => {
+    return api.getMcpStatus()
   })
 
   ipcMain.handle(IPC_OPENCODE_SAVE_PROVIDER, async (_event, input: Parameters<SettingsStore['saveProvider']>[0]) => {
@@ -406,6 +505,64 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
     const result = await settingsStore.saveDefaultModel(input)
     await sidecar.restart()
     return result
+  })
+
+  ipcMain.handle(IPC_OPENCODE_SAVE_SESSION_MODEL_OVERRIDE, async (_event, input: { sessionID: string; providerId: string; model: string }) => {
+    await settingsStore.saveSessionModelOverride(input)
+    const [assistants, assistantSessions, storedSettings, settings] = await Promise.all([
+      assistantStore.listAssistants(),
+      assistantStore.listAssistantSessions(),
+      settingsStore.getStoredSettings(),
+      settingsStore.getSettings(),
+    ])
+
+    return resolveSessionModelSelectionState(
+      input.sessionID,
+      assistants,
+      assistantSessions,
+      storedSettings,
+      settings,
+    )
+  })
+
+  ipcMain.handle(IPC_OPENCODE_CLEAR_SESSION_MODEL_OVERRIDE, async (_event, sessionID: string) => {
+    await settingsStore.clearSessionModelOverride(sessionID)
+    const [assistants, assistantSessions, storedSettings, settings] = await Promise.all([
+      assistantStore.listAssistants(),
+      assistantStore.listAssistantSessions(),
+      settingsStore.getStoredSettings(),
+      settingsStore.getSettings(),
+    ])
+
+    return resolveSessionModelSelectionState(
+      sessionID,
+      assistants,
+      assistantSessions,
+      storedSettings,
+      settings,
+    )
+  })
+
+  ipcMain.handle(IPC_OPENCODE_SAVE_MCP_SERVER, async (_event, input: SaveMcpServerInput) => {
+    const result = await settingsStore.saveMcpServer(input)
+    await applyRuntimeConfigChange(`saveMcpServer:${input.name}`)
+    return result
+  })
+
+  ipcMain.handle(IPC_OPENCODE_DELETE_MCP_SERVER, async (_event, name: string) => {
+    const result = await settingsStore.deleteMcpServer(name)
+    await applyRuntimeConfigChange(`deleteMcpServer:${name}`)
+    return result
+  })
+
+  ipcMain.handle(IPC_OPENCODE_CONNECT_MCP_SERVER, async (_event, name: string) => {
+    await api.connectMcpServer(name)
+    return { success: true }
+  })
+
+  ipcMain.handle(IPC_OPENCODE_DISCONNECT_MCP_SERVER, async (_event, name: string) => {
+    await api.disconnectMcpServer(name)
+    return { success: true }
   })
 
   ipcMain.handle(IPC_OPENCODE_LIST_ASSISTANTS, async () => {
@@ -498,8 +655,16 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       ipcMain.removeHandler(IPC_OPENCODE_ABORT_SESSION)
       ipcMain.removeHandler(IPC_OPENCODE_SEND_MESSAGE)
       ipcMain.removeHandler(IPC_OPENCODE_GET_SETTINGS)
+      ipcMain.removeHandler(IPC_OPENCODE_GET_SESSION_MODEL_SELECTION)
+      ipcMain.removeHandler(IPC_OPENCODE_LIST_MCP_STATUS)
       ipcMain.removeHandler(IPC_OPENCODE_SAVE_PROVIDER)
       ipcMain.removeHandler(IPC_OPENCODE_SAVE_DEFAULT_MODEL)
+      ipcMain.removeHandler(IPC_OPENCODE_SAVE_SESSION_MODEL_OVERRIDE)
+      ipcMain.removeHandler(IPC_OPENCODE_CLEAR_SESSION_MODEL_OVERRIDE)
+      ipcMain.removeHandler(IPC_OPENCODE_SAVE_MCP_SERVER)
+      ipcMain.removeHandler(IPC_OPENCODE_DELETE_MCP_SERVER)
+      ipcMain.removeHandler(IPC_OPENCODE_CONNECT_MCP_SERVER)
+      ipcMain.removeHandler(IPC_OPENCODE_DISCONNECT_MCP_SERVER)
       ipcMain.removeHandler(IPC_OPENCODE_LIST_ASSISTANTS)
       ipcMain.removeHandler(IPC_OPENCODE_SAVE_ASSISTANT)
       ipcMain.removeHandler(IPC_OPENCODE_DELETE_ASSISTANT)
@@ -514,6 +679,75 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
   }
 }
 
+function resolveSessionModelSelectionState(
+  sessionID: string,
+  assistants: AssistantRecord[],
+  assistantSessions: AssistantSessionRecord[],
+  storedSettings: Awaited<ReturnType<SettingsStore['getStoredSettings']>>,
+  settings: DesktopSettings,
+): SessionModelSelectionState {
+  const normalizedSessionID = sessionID?.trim() || ''
+  const overrideRecord = storedSettings.sessionModelOverrides[normalizedSessionID] ?? null
+  const override = normalizeModelSelection(storedSettings, overrideRecord)
+  const assistantDefault = resolveAssistantDefaultModelForSession(normalizedSessionID, assistants, assistantSessions, storedSettings)
+  const globalDefault = normalizeModelSelection(storedSettings, storedSettings.defaultModel)
+  const effective = override ?? assistantDefault ?? globalDefault
+
+  return {
+    sessionID: normalizedSessionID,
+    override,
+    effective,
+    source: override ? 'session' : assistantDefault ? 'assistant' : globalDefault ? 'global' : 'none',
+    options: buildSessionModelOptions(settings),
+  }
+}
+
+function normalizeModelSelection(
+  storedSettings: Awaited<ReturnType<SettingsStore['getStoredSettings']>>,
+  selection: ModelSelection | null | undefined,
+): ModelSelection | null {
+  if (!selection?.providerId || !selection.model) {
+    return null
+  }
+
+  const providerSettings = storedSettings.providers[selection.providerId]
+  if (!providerSettings || !providerSettings.models.includes(selection.model)) {
+    return null
+  }
+
+  return {
+    providerId: selection.providerId,
+    model: selection.model,
+  }
+}
+
+function resolveAssistantDefaultModelForSession(
+  sessionID: string,
+  assistants: AssistantRecord[],
+  assistantSessions: AssistantSessionRecord[],
+  storedSettings: Awaited<ReturnType<SettingsStore['getStoredSettings']>>,
+) {
+  const sessionBinding = assistantSessions.find(item => item.runtimeSessionId === sessionID)
+  if (!sessionBinding) {
+    return null
+  }
+
+  const assistant = assistants.find(item => item.id === sessionBinding.assistantId)
+  return normalizeModelSelection(storedSettings, assistant?.defaultModel ?? null)
+}
+
+function buildSessionModelOptions(settings: DesktopSettings): SessionModelOption[] {
+  return settings.providers.flatMap((provider) => {
+    const providerLabel = provider.label || getProviderDefinition(provider.providerType)?.name || provider.providerId
+    return provider.models.map(model => ({
+      providerId: provider.providerId,
+      providerLabel,
+      model,
+      label: `${providerLabel} / ${model}`,
+    }))
+  })
+}
+
 function resolveSessionBinding(
   sessionID: string,
   assistants: AssistantRecord[],
@@ -524,10 +758,22 @@ function resolveSessionBinding(
   const groupSession = groupRoomSessions.find((session) => session.runtimeSessionId === sessionID)
   if (groupSession) {
     const room = groupRooms.find((item) => item.id === groupSession.groupRoomId)
+    const participantAssistants = (room?.memberAssistantIds || [])
+      .map((assistantId) => assistants.find((item) => item.id === assistantId))
+      .filter((assistant): assistant is AssistantRecord => Boolean(assistant))
+      .map((assistant) => ({
+        id: assistant.id,
+        name: assistant.name,
+        badge: getAssistantBadge(assistant),
+      }))
     return {
       title: groupSession.title?.trim() || undefined,
       assistantName: room?.name?.trim() || 'AI 助手',
       assistantBadge: getGroupRoomBadge(room),
+      mode: 'group' as const,
+      participantAssistantIds: room?.memberAssistantIds?.length ? [...room.memberAssistantIds] : undefined,
+      participantAssistants: participantAssistants.length ? participantAssistants : undefined,
+      collaborationMode: room?.collaborationMode,
     }
   }
 
@@ -538,6 +784,7 @@ function resolveSessionBinding(
       title: assistantSession.title?.trim() || undefined,
       assistantName: assistant?.name?.trim() || 'AI 助手',
       assistantBadge: getAssistantBadge(assistant),
+      mode: 'regular' as const,
     }
   }
 
@@ -545,6 +792,7 @@ function resolveSessionBinding(
     title: undefined,
     assistantName: 'AI 助手',
     assistantBadge: 'AI',
+    mode: 'regular' as const,
   }
 }
 

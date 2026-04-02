@@ -4,7 +4,7 @@ import { CheckCircle2, ChevronDown, ChevronRight, Cpu, FileArchive, Key, Plug, P
 import { computed, onMounted, ref, watch } from 'vue'
 
 type TabId = 'model' | 'mcp' | 'skills' | 'behavior'
-type McpStatus = 'connected' | 'error' | 'pending'
+type McpStatus = 'connected' | 'failed' | 'needs_auth' | 'disabled' | 'needs_client_registration' | 'pending' | 'disconnected'
 type BehaviorLevelId = 'high' | 'medium' | 'low'
 type ProviderStatus = 'ready' | 'coming_soon'
 
@@ -26,12 +26,14 @@ type ProviderDefinition = {
 
 type ProviderSummary = {
   providerId: string
+  providerType: string
   label: string
   configured: boolean
   apiKeyHint: string | null
   baseUrl: string | null
   hasBaseUrl: boolean
-  model: string | null
+  models: string[]
+  defaultModel: string | null
   displayName: string | null
 }
 
@@ -42,12 +44,15 @@ type DesktopSettings = {
     model: string
     configured: boolean
   }
+  mcpServers: DesktopMcpServer[]
 }
 
 type SaveProviderInput = {
-  providerId: string
+  providerType: string
+  providerId?: string | null
   apiKey?: string | null
-  model?: string | null
+  models?: string[] | null
+  defaultModel?: string | null
   baseUrl?: string | null
   displayName?: string | null
   clear?: boolean
@@ -59,7 +64,32 @@ type SaveDefaultModelInput = {
 }
 
 type DefaultModel = { id: string, name: string, provider: string, badge?: string }
-type McpServer = { id: string, name: string, transport: string, status: McpStatus, desc: string }
+type DesktopMcpServer = {
+  name: string
+  type: 'local' | 'remote'
+  enabled: boolean
+  commandPreview: string | null
+  url: string | null
+  hasHeaders: boolean
+  hasOAuth: boolean
+  timeout: number | null
+}
+type McpRuntimeStatus =
+  | { status: 'connected' }
+  | { status: 'disabled' }
+  | { status: 'failed', error: string }
+  | { status: 'needs_auth' }
+  | { status: 'needs_client_registration', error: string }
+type McpServer = {
+  id: string
+  name: string
+  type: 'local' | 'remote'
+  transport: string
+  status: McpStatus
+  desc: string
+  enabled: boolean
+  error?: string
+}
 type UploadedSkill = {
   id: string
   name: string
@@ -103,9 +133,12 @@ const PROVIDER_OPTIONS: ProviderDefinition[] = [
 
 const currentTab = ref<TabId>('model')
 const selectedDefaultModel = ref('')
-const editingProviderId = ref<string | null>(null)
+const editingProviderType = ref<string | null>(null)
+const editingProviderInstanceId = ref<string | null>(null)
 const providerApiKey = ref('')
-const providerModel = ref('')
+const providerModels = ref<string[]>([])
+const providerModelDraft = ref('')
+const providerDefaultModel = ref('')
 const providerBaseUrl = ref('')
 const providerDisplayName = ref('')
 const providerError = ref('')
@@ -123,7 +156,12 @@ const settingsData = ref<DesktopSettings>({
     model: '',
     configured: false,
   },
+  mcpServers: [],
 })
+const mcpStatusLoading = ref(false)
+const mcpStatusError = ref('')
+const runtimeMcpStatus = ref<Record<string, McpRuntimeStatus>>({})
+const mcpActionLoading = ref<Record<string, 'connect' | 'disconnect' | 'delete'>>({})
 const showMcpImport = ref(false)
 const geekMode = ref(false)
 const behaviorLevel = ref<BehaviorLevelId>('medium')
@@ -135,10 +173,11 @@ const skillsState = ref<DesktopSkillState>({
 })
 
 const mcpJson = ref(`{
-  "mcpServers": {
+  "mcp": {
     "custom-api": {
+      "type": "remote",
       "url": "https://mcp.example.com/server",
-      "transport": "streamable-http"
+      "enabled": true
     }
   }
 }`)
@@ -150,13 +189,6 @@ const navItems = [
   { id: 'behavior', label: '行为配置', desc: '安全级别与自动化', icon: ShieldCheck },
 ] as const
 
-const mcpServers = ref<McpServer[]>([
-  { id: 'filesystem', name: 'filesystem', transport: 'stdio', status: 'connected', desc: '本地文件系统读写' },
-  { id: 'figma', name: 'figma', transport: 'stdio', status: 'connected', desc: '设计资源读取与变量拉取' },
-  { id: 'browser', name: 'browser', transport: 'streamable-http', status: 'pending', desc: '网页抓取与页面预览' },
-  { id: 'postgres', name: 'postgres', transport: 'streamable-http', status: 'error', desc: '数据库查询与检索' },
-])
-
 const behaviorLevels = [
   { id: 'high', label: '高', desc: '任何跨应用跳转、写文件操作均需要人工确认', hint: '最安全，每步操作都会弹出确认' },
   { id: 'medium', label: '中', desc: '仅涉及删除、外发、批量写入等敏感动作时确认', hint: '推荐默认，平衡安全与效率', default: true },
@@ -167,32 +199,76 @@ const uploadedSkills = ref<UploadedSkill[]>([])
 
 const activeNav = computed(() => navItems.find(item => item.id === currentTab.value) ?? navItems[0])
 const providerMap = computed(() => new Map(PROVIDER_OPTIONS.map(provider => [provider.id, provider])))
-const providerOptions = computed(() => PROVIDER_OPTIONS)
+const providerOptions = computed(() => PROVIDER_OPTIONS.filter(provider => provider.id !== 'custom-openai-compatible'))
+const customCompatibleProvider = computed(() => providerMap.value.get('custom-openai-compatible') ?? null)
+const configuredProviderMap = computed(() => new Map(settingsData.value.providers.map(provider => [provider.providerId, provider])))
+const providersByType = computed(() =>
+  settingsData.value.providers.reduce<Record<string, ProviderSummary[]>>((result, provider) => {
+    const list = result[provider.providerType] ?? []
+    list.push(provider)
+    result[provider.providerType] = list.sort((left, right) => left.label.localeCompare(right.label))
+    return result
+  }, {}),
+)
+const customProviderInstances = computed(() => providersByType.value['custom-openai-compatible'] ?? [])
 const defaultModels = computed<DefaultModel[]>(() =>
   settingsData.value.providers
     .filter((provider) => {
-      const definition = providerMap.value.get(provider.providerId)
-      return definition?.status === 'ready' && provider.configured && provider.model
+      const definition = providerMap.value.get(provider.providerType)
+      return definition?.status === 'ready' && provider.configured && provider.models.length
     })
-    .map((provider) => ({
-      id: `${provider.providerId}:${provider.model}`,
-      name: provider.model ?? '',
-      provider: provider.label,
-      badge:
-        settingsData.value.defaultModel.configured
-        && settingsData.value.defaultModel.providerId === provider.providerId
-        && settingsData.value.defaultModel.model === provider.model
-          ? '默认'
-          : undefined,
-    })),
+    .flatMap((provider) =>
+      provider.models.map(model => ({
+        id: `${provider.providerId}:${model}`,
+        name: model,
+        provider: provider.label,
+        badge:
+          settingsData.value.defaultModel.configured
+          && settingsData.value.defaultModel.providerId === provider.providerId
+          && settingsData.value.defaultModel.model === model
+            ? '默认'
+            : undefined,
+      })),
+    ),
 )
 const currentDefaultModel = computed(() => defaultModels.value.find(model => model.id === selectedDefaultModel.value) ?? defaultModels.value[0] ?? null)
-const editingProvider = computed(() => providerOptions.value.find(provider => provider.id === editingProviderId.value) ?? null)
-const editingProviderSummary = computed(() => settingsData.value.providers.find(provider => provider.providerId === editingProviderId.value) ?? null)
+const editingProvider = computed(() => providerOptions.value.find(provider => provider.id === editingProviderType.value) ?? null)
+const editingProviderSummary = computed(() => (
+  editingProviderInstanceId.value
+    ? configuredProviderMap.value.get(editingProviderInstanceId.value) ?? null
+    : null
+))
+const mcpServers = computed<McpServer[]>(() =>
+  settingsData.value.mcpServers.map((server) => {
+    const runtimeStatus = runtimeMcpStatus.value[server.name]
+    const status: McpStatus = !server.enabled
+      ? 'disabled'
+      : runtimeStatus?.status === 'disabled'
+        ? 'disconnected'
+        : runtimeStatus?.status ?? 'pending'
+    const detailParts = [
+      server.type === 'remote' ? server.url || '未填写 URL' : server.commandPreview || '未填写命令',
+      server.hasHeaders ? '已配置 Headers' : '',
+      server.hasOAuth ? '已配置 OAuth' : '',
+      server.timeout ? `超时 ${server.timeout}ms` : '',
+    ].filter(Boolean)
+
+    return {
+      id: `mcp-${server.name}`,
+      name: server.name,
+      type: server.type,
+      transport: server.type === 'local' ? 'stdio' : 'streamable-http',
+      status,
+      desc: detailParts.join(' · '),
+      enabled: server.enabled,
+      ...(('error' in (runtimeStatus || {})) ? { error: runtimeStatus.error } : {}),
+    }
+  }),
+)
 const mcpStats = computed(() => [
   { label: '已连接', value: mcpServers.value.filter(server => server.status === 'connected').length, tone: 'text-[#6B7280]' },
-  { label: '失败', value: mcpServers.value.filter(server => server.status === 'error').length, tone: 'text-[#EF4444]' },
-  { label: '待连接', value: mcpServers.value.filter(server => server.status === 'pending').length, tone: 'text-black/42' },
+  { label: '异常', value: mcpServers.value.filter(server => ['failed', 'needs_auth', 'needs_client_registration'].includes(server.status)).length, tone: 'text-[#EF4444]' },
+  { label: '未连接', value: mcpServers.value.filter(server => ['pending', 'disconnected', 'disabled'].includes(server.status)).length, tone: 'text-black/42' },
   { label: '总计', value: mcpServers.value.length, tone: 'text-[#4B5563]' },
 ])
 const selectedBehaviorMeta = computed(() => behaviorLevels.find(level => level.id === behaviorLevel.value) ?? behaviorLevels[1])
@@ -204,6 +280,16 @@ watch(defaultModels, (models) => {
   }
   if (!models.some(model => model.id === selectedDefaultModel.value)) {
     selectedDefaultModel.value = models[0].id
+  }
+}, { immediate: true })
+
+watch(providerModels, (models) => {
+  if (!models.length) {
+    providerDefaultModel.value = ''
+    return
+  }
+  if (!models.includes(providerDefaultModel.value)) {
+    providerDefaultModel.value = models[0]
   }
 }, { immediate: true })
 
@@ -254,34 +340,84 @@ async function loadSettings() {
   }
 }
 
+async function loadMcpStatus() {
+  try {
+    mcpStatusLoading.value = true
+    mcpStatusError.value = ''
+    const api = getDesktopApi()
+    if (!api.listMcpStatus) {
+      runtimeMcpStatus.value = {}
+      return
+    }
+
+    runtimeMcpStatus.value = await api.listMcpStatus() as Record<string, McpRuntimeStatus>
+  } catch (error) {
+    mcpStatusError.value = error instanceof Error ? error.message : '加载 MCP 状态失败'
+  } finally {
+    mcpStatusLoading.value = false
+  }
+}
+
+function setMcpActionLoading(name: string, action: 'connect' | 'disconnect' | 'delete') {
+  mcpActionLoading.value = {
+    ...mcpActionLoading.value,
+    [name]: action,
+  }
+}
+
+function clearMcpActionLoading(name: string) {
+  if (!(name in mcpActionLoading.value)) {
+    return
+  }
+
+  const next = { ...mcpActionLoading.value }
+  delete next[name]
+  mcpActionLoading.value = next
+}
+
 onMounted(() => {
   void loadSettings()
+  void loadMcpStatus()
   void loadSkills()
 })
 
 function providerConfigured(id: string) {
-  return Boolean(settingsData.value.providers.find(provider => provider.providerId === id)?.configured)
+  return (providersByType.value[id] ?? []).some(provider => provider.configured)
 }
 
 function providerStatusText(provider: ProviderDefinition) {
   if (provider.status === 'coming_soon') return '即将支持'
-  return providerConfigured(provider.id) ? '已配置' : '点击配置'
+  const count = (providersByType.value[provider.id] ?? []).length
+  if (!count) return '点击配置'
+  if (provider.id === 'custom-openai-compatible') {
+    return `已保存 ${count} 套`
+  }
+  return '已配置'
 }
 
-function openProvider(provider: ProviderDefinition) {
-  editingProviderId.value = provider.id
+function openProvider(provider: ProviderDefinition, providerId?: string | null) {
+  editingProviderType.value = provider.id
+  editingProviderInstanceId.value = providerId?.trim() || (provider.id === 'custom-openai-compatible' ? null : provider.id)
+  const summary = editingProviderInstanceId.value
+    ? configuredProviderMap.value.get(editingProviderInstanceId.value) ?? null
+    : null
   providerApiKey.value = ''
-  providerModel.value = editingProviderSummary.value?.model ?? ''
-  providerBaseUrl.value = editingProviderSummary.value?.baseUrl ?? ''
-  providerDisplayName.value = editingProviderSummary.value?.displayName ?? editingProviderSummary.value?.label ?? provider.name
+  providerModels.value = [...(summary?.models ?? [])]
+  providerModelDraft.value = ''
+  providerDefaultModel.value = summary?.defaultModel ?? summary?.models[0] ?? ''
+  providerBaseUrl.value = summary?.baseUrl ?? ''
+  providerDisplayName.value = summary?.displayName ?? (provider.id === 'custom-openai-compatible' ? '' : provider.name)
   providerError.value = ''
   providerSubmitting.value = false
 }
 
 function closeProvider() {
-  editingProviderId.value = null
+  editingProviderType.value = null
+  editingProviderInstanceId.value = null
   providerApiKey.value = ''
-  providerModel.value = ''
+  providerModels.value = []
+  providerModelDraft.value = ''
+  providerDefaultModel.value = ''
   providerBaseUrl.value = ''
   providerDisplayName.value = ''
   providerError.value = ''
@@ -294,8 +430,8 @@ async function saveProvider() {
     providerError.value = `请先为 ${editingProvider.value.name} 填写 API Key`
     return
   }
-  if (editingProvider.value.supportsModel && !providerModel.value.trim()) {
-    providerError.value = `请先为 ${editingProvider.value.name} 填写模型 ID`
+  if (editingProvider.value.supportsModel && !providerModels.value.length) {
+    providerError.value = `请先为 ${editingProvider.value.name} 至少填写一个模型 ID`
     return
   }
   if (editingProvider.value.requiresBaseUrl && !providerBaseUrl.value.trim()) {
@@ -310,10 +446,13 @@ async function saveProvider() {
   try {
     providerSubmitting.value = true
     providerError.value = ''
+    const serializedModels = [...providerModels.value]
     await getDesktopApi().saveProvider({
-      providerId: editingProvider.value.id,
+      providerType: editingProvider.value.id,
+      providerId: editingProviderInstanceId.value || undefined,
       apiKey: providerApiKey.value.trim() || undefined,
-      model: editingProvider.value.supportsModel ? providerModel.value.trim() || null : undefined,
+      models: editingProvider.value.supportsModel ? serializedModels : undefined,
+      defaultModel: editingProvider.value.supportsModel ? providerDefaultModel.value || serializedModels[0] || null : undefined,
       baseUrl: editingProvider.value.supportsBaseUrl ? providerBaseUrl.value.trim() || null : undefined,
       displayName: editingProvider.value.supportsDisplayName ? providerDisplayName.value.trim() : undefined,
     } satisfies SaveProviderInput)
@@ -333,7 +472,8 @@ async function clearProvider() {
     providerSubmitting.value = true
     providerError.value = ''
     await getDesktopApi().saveProvider({
-      providerId: editingProvider.value.id,
+      providerType: editingProvider.value.id,
+      providerId: editingProviderInstanceId.value || editingProvider.value.id,
       clear: true,
     } satisfies SaveProviderInput)
     await loadSettings()
@@ -375,7 +515,8 @@ async function saveDefaultModel() {
 
 function providerMeta(providerId: string) {
   const provider = providerMap.value.get(providerId)
-  const summary = settingsData.value.providers.find(item => item.providerId === providerId)
+  const summaries = providersByType.value[providerId] ?? []
+  const summary = summaries[0]
   if (!provider) return '未识别的提供方'
   if (provider.status === 'coming_soon') return provider.comingSoonNote ?? '这一接入方式将在后续版本开放。'
   if (!summary?.configured) {
@@ -385,29 +526,120 @@ function providerMeta(providerId: string) {
   }
 
   const parts = [summary.apiKeyHint ?? '已保存密钥']
-  if (summary.model) parts.push(`模型：${summary.model}`)
+  if (provider.id === 'custom-openai-compatible') {
+    parts.push(`实例：${summaries.length}`)
+  }
+  if (summary.models.length) parts.push(`模型：${summary.models.length}`)
   if (summary.baseUrl) parts.push(`地址：${summary.baseUrl.length > 36 ? `${summary.baseUrl.slice(0, 33)}...` : summary.baseUrl}`)
   return parts.join(' · ')
 }
 
-function removeMcpServer(id: string) {
-  mcpServers.value = mcpServers.value.filter(server => server.id !== id)
+function providerInstanceMeta(summary: ProviderSummary) {
+  const parts = [summary.apiKeyHint ?? '已保存密钥']
+  if (summary.models.length) parts.push(`${summary.models.length} 个模型`)
+  if (summary.defaultModel) parts.push(`默认：${summary.defaultModel}`)
+  if (summary.baseUrl) parts.push(summary.baseUrl.length > 42 ? `${summary.baseUrl.slice(0, 39)}...` : summary.baseUrl)
+  return parts.join(' · ')
 }
 
-function importMcpConfig() {
+function addProviderModel() {
+  const model = providerModelDraft.value.trim()
+  if (!model) {
+    return
+  }
+  if (!providerModels.value.includes(model)) {
+    providerModels.value = [...providerModels.value, model]
+  }
+  providerDefaultModel.value = providerDefaultModel.value || model
+  providerModelDraft.value = ''
+}
+
+function removeProviderModel(model: string) {
+  providerModels.value = providerModels.value.filter(item => item !== model)
+  if (providerDefaultModel.value === model) {
+    providerDefaultModel.value = providerModels.value[0] ?? ''
+  }
+}
+
+async function removeMcpServer(name: string) {
+  const api = getDesktopApi()
+  if (!api.deleteMcpServer) {
+    mcpStatusError.value = '当前桌面运行时未提供 MCP 删除接口'
+    return
+  }
+
   try {
+    mcpStatusError.value = ''
+    setMcpActionLoading(name, 'delete')
+    await api.deleteMcpServer(name)
+    await Promise.all([loadSettings(), loadMcpStatus()])
+  } catch (error) {
+    mcpStatusError.value = error instanceof Error ? error.message : '删除 MCP 服务失败'
+  } finally {
+    clearMcpActionLoading(name)
+  }
+}
+
+async function importMcpConfig() {
+  const api = getDesktopApi()
+  if (!api.saveMcpServer) {
+    mcpStatusError.value = '当前桌面运行时未提供 MCP 保存接口'
+    return
+  }
+
+  try {
+    mcpStatusError.value = ''
     const parsed = JSON.parse(mcpJson.value)
-    const incoming = Object.entries(parsed.mcpServers ?? {}).map(([name, config]) => ({
-      id: `mcp-${name}`,
-      name,
-      transport: typeof config === 'object' && config && 'transport' in config ? String((config as { transport?: string }).transport || 'stdio') : 'stdio',
-      status: 'pending' as const,
-      desc: '从 JSON 配置导入',
-    }))
-    const existing = new Set(mcpServers.value.map(server => server.name))
-    mcpServers.value = [...mcpServers.value, ...incoming.filter(server => !existing.has(server.name))]
+    const incoming = Object.entries(resolveImportedMcpMap(parsed))
+    for (const [name, config] of incoming) {
+      await api.saveMcpServer({
+        name,
+        config: normalizeImportedMcpConfig(config),
+      })
+    }
+    await Promise.all([loadSettings(), loadMcpStatus()])
     showMcpImport.value = false
-  } catch {}
+  } catch (error) {
+    mcpStatusError.value = error instanceof Error ? error.message : '导入 MCP 配置失败'
+  }
+}
+
+async function connectMcpServer(name: string) {
+  const api = getDesktopApi()
+  if (!api.connectMcpServer) {
+    mcpStatusError.value = '当前桌面运行时未提供 MCP 连接接口'
+    return
+  }
+
+  try {
+    mcpStatusError.value = ''
+    setMcpActionLoading(name, 'connect')
+    await api.connectMcpServer(name)
+    await loadMcpStatus()
+  } catch (error) {
+    mcpStatusError.value = error instanceof Error ? error.message : '连接 MCP 服务失败'
+  } finally {
+    clearMcpActionLoading(name)
+  }
+}
+
+async function disconnectMcpServer(name: string) {
+  const api = getDesktopApi()
+  if (!api.disconnectMcpServer) {
+    mcpStatusError.value = '当前桌面运行时未提供 MCP 断开接口'
+    return
+  }
+
+  try {
+    mcpStatusError.value = ''
+    setMcpActionLoading(name, 'disconnect')
+    await api.disconnectMcpServer(name)
+    await loadMcpStatus()
+  } catch (error) {
+    mcpStatusError.value = error instanceof Error ? error.message : '断开 MCP 服务失败'
+  } finally {
+    clearMcpActionLoading(name)
+  }
 }
 
 async function confirmSkillUpload() {
@@ -451,6 +683,154 @@ function selectBehaviorLevel(id: BehaviorLevelId) {
   const target = behaviorLevels.find(level => level.id === id)
   if (!target || (target.requireGeek && !geekMode.value)) return
   behaviorLevel.value = id
+}
+
+function normalizeImportedMcpConfig(input: unknown) {
+  if (typeof input !== 'object' || input === null) {
+    throw new Error('MCP 配置必须是对象。')
+  }
+
+  const record = input as Record<string, unknown>
+  if (record.type === 'local' || 'command' in record || 'args' in record) {
+    return normalizeImportedLocalMcpConfig(record)
+  }
+  if (record.type === 'remote' || 'url' in record) {
+    return normalizeImportedRemoteMcpConfig(record)
+  }
+
+  throw new Error('无法识别 MCP 配置，请提供 url 或 command。')
+}
+
+function resolveImportedMcpMap(input: unknown) {
+  if (typeof input !== 'object' || input === null) {
+    throw new Error('MCP 导入内容必须是对象。')
+  }
+
+  const record = input as Record<string, unknown>
+  const source = record.mcp ?? record.mcpServers
+  if (typeof source !== 'object' || source === null || Array.isArray(source)) {
+    throw new Error('导入内容必须包含 mcp 或 mcpServers 对象。')
+  }
+
+  return source as Record<string, unknown>
+}
+
+function normalizeImportedLocalMcpConfig(input: Record<string, unknown>) {
+  const command = Array.isArray(input.command)
+    ? input.command.map(item => String(item).trim()).filter(Boolean)
+    : typeof input.command === 'string'
+      ? input.command.split(' ').map(item => item.trim()).filter(Boolean)
+      : []
+  const args = Array.isArray(input.args)
+    ? input.args.map(item => String(item).trim()).filter(Boolean)
+    : []
+  const mergedCommand = [...command, ...args]
+
+  if (!mergedCommand.length) {
+    throw new Error('本地 MCP 配置至少需要 command。')
+  }
+
+  const environment = normalizeRecord(input.environment)
+  return {
+    type: 'local' as const,
+    command: mergedCommand,
+    ...(typeof input.enabled === 'boolean' ? { enabled: input.enabled } : {}),
+    ...(typeof input.timeout === 'number' ? { timeout: input.timeout } : {}),
+    ...(environment ? { environment } : {}),
+  }
+}
+
+function normalizeImportedRemoteMcpConfig(input: Record<string, unknown>) {
+  const url = typeof input.url === 'string' ? input.url.trim() : ''
+  if (!url) {
+    throw new Error('远程 MCP 配置缺少 url。')
+  }
+
+  const headers = normalizeRecord(input.headers)
+  const oauth = normalizeImportedOauth(input.oauth)
+
+  return {
+    type: 'remote' as const,
+    url,
+    ...(typeof input.enabled === 'boolean' ? { enabled: input.enabled } : {}),
+    ...(typeof input.timeout === 'number' ? { timeout: input.timeout } : {}),
+    ...(headers ? { headers } : {}),
+    ...(typeof oauth !== 'undefined' ? { oauth } : {}),
+  }
+}
+
+function normalizeImportedOauth(input: unknown) {
+  if (input === false) return false
+  if (typeof input !== 'object' || input === null) return undefined
+
+  const record = input as Record<string, unknown>
+  const clientId = typeof record.clientId === 'string' ? record.clientId.trim() : ''
+  const clientSecret = typeof record.clientSecret === 'string' ? record.clientSecret.trim() : ''
+  const scope = typeof record.scope === 'string' ? record.scope.trim() : ''
+
+  return {
+    ...(clientId ? { clientId } : {}),
+    ...(clientSecret ? { clientSecret } : {}),
+    ...(scope ? { scope } : {}),
+  }
+}
+
+function normalizeRecord(input: unknown) {
+  if (typeof input !== 'object' || input === null) return undefined
+
+  const entries = Object.entries(input as Record<string, unknown>)
+    .map(([key, value]) => [key.trim(), String(value).trim()] as const)
+    .filter(([key, value]) => key && value)
+
+  return entries.length ? Object.fromEntries(entries) : undefined
+}
+
+function mcpStatusLabel(status: McpStatus) {
+  switch (status) {
+    case 'connected':
+      return '已连接'
+    case 'failed':
+      return '连接失败'
+    case 'needs_auth':
+      return '需要认证'
+    case 'needs_client_registration':
+      return '待注册'
+    case 'disconnected':
+      return '已断开'
+    case 'disabled':
+      return '未启用'
+    default:
+      return '待连接'
+  }
+}
+
+function mcpStatusBadgeClass(status: McpStatus) {
+  switch (status) {
+    case 'connected':
+      return 'bg-[#F3F4F6] text-[#6B7280]'
+    case 'failed':
+    case 'needs_auth':
+    case 'needs_client_registration':
+      return 'bg-[#FEF2F2] text-[#EF4444]'
+    case 'disconnected':
+      return 'bg-[#FFF8E8] text-[#92400E]'
+    case 'disabled':
+      return 'bg-[#F3F4F6] text-black/40'
+    default:
+      return 'bg-[#FFF8E8] text-[#92400E]'
+  }
+}
+
+function isMcpActionLoading(name: string, action: 'connect' | 'disconnect' | 'delete') {
+  return mcpActionLoading.value[name] === action
+}
+
+function canConnectMcp(server: McpServer) {
+  return server.enabled && server.status !== 'connected'
+}
+
+function canDisconnectMcp(server: McpServer) {
+  return server.enabled && server.status === 'connected'
 }
 </script>
 
@@ -543,7 +923,7 @@ function selectBehaviorLevel(id: BehaviorLevelId) {
 
             <section class="space-y-3">
               <div class="flex items-center gap-2"><div class="text-[12px] font-semibold text-black/82">AI 提供商</div><div class="h-px flex-1 bg-[var(--ai-line)]" /></div>
-              <div class="text-[10px] leading-4 text-black/40">已按 opencode provider registry 展开，可配置供应商和即将支持的入口都会显示。</div>
+              <div class="text-[10px] leading-4 text-black/40">标准供应商默认维护一套连接配置，但可以保存多个模型；自定义兼容接口可以保存多套连接实例。</div>
               <div v-if="settingsError" class="rounded-[12px] bg-[#FEF2F2] px-3 py-2 text-[11px] text-[#DC2626]">
                 {{ settingsError }}
               </div>
@@ -562,6 +942,37 @@ function selectBehaviorLevel(id: BehaviorLevelId) {
                   <ChevronRight data-testid="provider-config-chevron" class="h-3.5 w-3.5 shrink-0 text-black/24 transition-colors group-hover:text-[#726FFF]" />
                 </button>
               </div>
+
+              <div class="space-y-2 rounded-[18px] border border-[#E8EAF2] bg-[rgba(255,255,255,0.86)] p-4">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <div class="text-[12px] font-semibold text-black/82">自定义兼容接口实例</div>
+                    <div class="mt-1 text-[10px] text-black/40">适合保存公司网关、本地转发和不同 OpenAI-compatible 端点。</div>
+                  </div>
+                  <button class="inline-flex items-center gap-1.5 rounded-[12px] border border-[#D8DAE6] bg-white px-3 py-2 text-[11px] font-medium text-[#726FFF] transition-colors hover:bg-[#F8F7FF] disabled:cursor-not-allowed disabled:opacity-60" :disabled="!customCompatibleProvider" @click="customCompatibleProvider && openProvider(customCompatibleProvider)">
+                    <Plus class="h-3.5 w-3.5" />
+                    <span>新增实例</span>
+                  </button>
+                </div>
+                <div v-if="customProviderInstances.length" class="space-y-2">
+                  <button
+                    v-for="provider in customProviderInstances"
+                    :key="provider.providerId"
+                    class="flex w-full items-center gap-3 rounded-[14px] border border-[#E8EAF2] bg-[#FAFAFC] px-3.5 py-3 text-left transition-all hover:border-[#726FFF]/36 hover:bg-white"
+                    @click="customCompatibleProvider && openProvider(customCompatibleProvider, provider.providerId)"
+                  >
+                    <div class="flex h-8 w-8 shrink-0 items-center justify-center rounded-[12px] border border-[#4338ca26] bg-[#EEF2FF] text-[10px] font-semibold text-[#4338ca]">CU</div>
+                    <div class="min-w-0 flex-1">
+                      <div class="truncate text-[11px] font-medium text-black/82">{{ provider.label }}</div>
+                      <div class="mt-0.5 truncate text-[10px] text-black/38">{{ providerInstanceMeta(provider) }}</div>
+                    </div>
+                    <ChevronRight class="h-3.5 w-3.5 shrink-0 text-black/24" />
+                  </button>
+                </div>
+                <div v-else class="rounded-[14px] bg-[#FAFAFC] px-3.5 py-3 text-[11px] text-black/42">
+                  还没有保存任何自定义兼容接口实例。
+                </div>
+              </div>
             </section>
           </div>
 
@@ -571,25 +982,60 @@ function selectBehaviorLevel(id: BehaviorLevelId) {
               <div><div class="text-[15px] font-semibold text-black/82">MCP</div><div class="mt-0.5 text-[11px] text-black/40">管理 Model Context Protocol 外部工具服务</div></div>
             </div>
 
-            <div data-testid="mcp-stats-row" class="flex items-center gap-4 rounded-[16px] border border-[#E7EAF3] bg-[#FAFAFC] px-4 py-3">
-              <div v-for="(stat, index) in mcpStats" :key="stat.label" data-testid="mcp-stat-item" :class="index < mcpStats.length - 1 ? 'border-r border-[#E7EAF3] pr-4' : ''" class="flex items-center gap-2"><span :class="stat.tone" class="text-[14px] font-semibold">{{ stat.value }}</span><span class="text-[10px] text-black/38">{{ stat.label }}</span></div>
+            <div v-if="mcpStatusError" class="rounded-[14px] bg-[#FEF2F2] px-3 py-2 text-[11px] text-[#DC2626]">
+              {{ mcpStatusError }}
             </div>
 
-            <div class="space-y-1.5">
-              <div v-for="server in mcpServers" :key="server.id" class="flex items-center gap-3 rounded-[16px] border border-[#E8EAF2] bg-[#FAFAFC] px-4 py-3">
-                <CheckCircle2 v-if="server.status === 'connected'" class="h-4 w-4 shrink-0 text-[#6B7280]" />
-                <XCircle v-else-if="server.status === 'error'" class="h-4 w-4 shrink-0 text-[#EF4444]" />
-                <div v-else class="h-3.5 w-3.5 shrink-0 rounded-full border border-[#D1D5DB]" />
-                <div class="min-w-0 flex-1">
-                  <div class="flex items-center gap-2"><span class="text-[12px] font-medium text-black/82">{{ server.name }}</span><span :class="server.status === 'connected' ? 'bg-[#F3F4F6] text-[#6B7280]' : server.status === 'error' ? 'bg-[#FEF2F2] text-[#EF4444]' : 'bg-[#F3F4F6] text-black/40'" class="rounded-[6px] px-1.5 py-0.5 text-[9px] font-medium">{{ server.status === 'connected' ? '已连接' : server.status === 'error' ? '连接失败' : '待连接' }}</span></div>
-                  <div class="mt-0.5 truncate text-[10px] text-black/38">{{ server.desc }} · {{ server.transport }}</div>
-                </div>
-                <button class="flex h-7 w-7 items-center justify-center rounded-[10px] text-black/28 transition-colors hover:bg-[#FEF2F2] hover:text-[#EF4444]" @click="removeMcpServer(server.id)"><Trash2 class="h-3.5 w-3.5" /></button>
+            <div data-testid="mcp-stats-row" class="flex items-center gap-4 rounded-[16px] border border-[#E7EAF3] bg-[#FAFAFC] px-4 py-3">
+              <div v-for="(stat, index) in mcpStats" :key="stat.label" data-testid="mcp-stat-item" :class="index < mcpStats.length - 1 ? 'border-r border-[#E7EAF3] pr-4' : ''" class="flex items-center gap-2"><span :class="stat.tone" class="text-[14px] font-semibold">{{ stat.value }}</span><span class="text-[10px] text-black/38">{{ stat.label }}</span></div>
+              <div class="ml-auto text-[10px] text-black/36">
+                {{ mcpStatusLoading ? '正在刷新状态...' : '状态已同步' }}
               </div>
             </div>
 
+            <div v-if="mcpServers.length" class="space-y-1.5">
+              <div v-for="server in mcpServers" :key="server.id" class="flex items-center gap-3 rounded-[16px] border border-[#E8EAF2] bg-[#FAFAFC] px-4 py-3">
+                <CheckCircle2 v-if="server.status === 'connected'" class="h-4 w-4 shrink-0 text-[#6B7280]" />
+                <XCircle v-else-if="['failed', 'needs_auth', 'needs_client_registration'].includes(server.status)" class="h-4 w-4 shrink-0 text-[#EF4444]" />
+                <div v-else class="h-3.5 w-3.5 shrink-0 rounded-full border border-[#D1D5DB]" />
+                <div class="min-w-0 flex-1">
+                  <div class="flex items-center gap-2"><span class="text-[12px] font-medium text-black/82">{{ server.name }}</span><span :class="mcpStatusBadgeClass(server.status)" class="rounded-[6px] px-1.5 py-0.5 text-[9px] font-medium">{{ mcpStatusLabel(server.status) }}</span></div>
+                  <div class="mt-0.5 truncate text-[10px] text-black/38">{{ server.desc }} · {{ server.transport }}</div>
+                  <div v-if="server.error" class="mt-1 truncate text-[10px] text-[#DC2626]">{{ server.error }}</div>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button
+                    v-if="canConnectMcp(server)"
+                    class="rounded-[10px] border border-[#E3E7F3] bg-white px-3 py-1.5 text-[10px] font-medium text-black/62 transition-colors hover:border-[#726FFF] hover:text-[#726FFF] disabled:cursor-not-allowed disabled:opacity-60"
+                    :disabled="isMcpActionLoading(server.name, 'connect')"
+                    @click="connectMcpServer(server.name)"
+                  >
+                    {{ isMcpActionLoading(server.name, 'connect') ? '连接中...' : '连接' }}
+                  </button>
+                  <button
+                    v-else-if="canDisconnectMcp(server)"
+                    class="rounded-[10px] border border-[#E3E7F3] bg-white px-3 py-1.5 text-[10px] font-medium text-black/62 transition-colors hover:border-[#726FFF] hover:text-[#726FFF] disabled:cursor-not-allowed disabled:opacity-60"
+                    :disabled="isMcpActionLoading(server.name, 'disconnect')"
+                    @click="disconnectMcpServer(server.name)"
+                  >
+                    {{ isMcpActionLoading(server.name, 'disconnect') ? '断开中...' : '断开' }}
+                  </button>
+                  <button
+                    class="flex h-7 w-7 items-center justify-center rounded-[10px] text-black/28 transition-colors hover:bg-[#FEF2F2] hover:text-[#EF4444] disabled:cursor-not-allowed disabled:opacity-60"
+                    :disabled="isMcpActionLoading(server.name, 'delete')"
+                    @click="removeMcpServer(server.name)"
+                  >
+                    <Trash2 class="h-3.5 w-3.5" />
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div v-else class="rounded-[16px] border border-dashed border-[#D9DEEA] bg-[#FCFCFE] px-4 py-5 text-[11px] leading-5 text-black/42">
+              还没有 MCP 服务。你可以直接粘贴 `opencode` 配置里的 `mcp` 或旧格式 `mcpServers` JSON 片段进行导入。
+            </div>
+
             <div v-if="showMcpImport" data-testid="mcp-import-panel" class="overflow-hidden rounded-[18px] border border-[#E7EAF3] bg-white">
-              <div class="border-b border-[var(--ai-line)] px-4 py-3"><div class="text-[12px] font-semibold text-black/82">粘贴 JSON 添加 MCP 服务</div><div class="mt-1 text-[10px] text-black/38">支持直接粘贴参考项目里的 mcpServers 配置结构。</div></div>
+              <div class="border-b border-[var(--ai-line)] px-4 py-3"><div class="text-[12px] font-semibold text-black/82">粘贴 JSON 添加 MCP 服务</div><div class="mt-1 text-[10px] text-black/38">支持粘贴 `opencode` 的 `mcp` 配置，也兼容旧的 `mcpServers` 结构。</div></div>
               <div class="p-4"><textarea v-model="mcpJson" rows="8" class="w-full resize-none rounded-[16px] border border-[#E5E7EB] bg-[#F9FAFB] px-3.5 py-3 text-[12px] leading-5 text-black/74 outline-none transition-colors focus:border-[#726FFF]" /></div>
               <div class="flex justify-end gap-2 border-t border-[var(--ai-line)] px-4 py-3">
                 <button class="rounded-[12px] border border-[#E5E7EB] bg-white px-4 py-2 text-[12px] text-black/56 transition-colors hover:bg-[#F9FAFB]" @click="showMcpImport = false">取消</button>
@@ -597,9 +1043,14 @@ function selectBehaviorLevel(id: BehaviorLevelId) {
               </div>
             </div>
 
-            <button data-testid="mcp-import-toggle" class="flex w-full items-center justify-center gap-2 rounded-[16px] border border-dashed border-[#D1D5DB] py-3 text-[12px] font-medium text-black/46 transition-all hover:border-[#726FFF] hover:bg-[#F8F7FF] hover:text-[#726FFF]" @click="showMcpImport = !showMcpImport">
-              <Plus class="h-3.5 w-3.5" /><span>展开 JSON 导入</span><ChevronDown class="h-3.5 w-3.5 transition-transform" :class="showMcpImport ? 'rotate-180' : ''" />
-            </button>
+            <div class="flex gap-2">
+              <button data-testid="mcp-import-toggle" class="flex flex-1 items-center justify-center gap-2 rounded-[16px] border border-dashed border-[#D1D5DB] py-3 text-[12px] font-medium text-black/46 transition-all hover:border-[#726FFF] hover:bg-[#F8F7FF] hover:text-[#726FFF]" @click="showMcpImport = !showMcpImport">
+                <Plus class="h-3.5 w-3.5" /><span>展开 JSON 导入</span><ChevronDown class="h-3.5 w-3.5 transition-transform" :class="showMcpImport ? 'rotate-180' : ''" />
+              </button>
+              <button class="rounded-[16px] border border-[#E5E7EB] bg-white px-4 py-3 text-[12px] font-medium text-black/56 transition-colors hover:bg-[#F9FAFB]" @click="loadMcpStatus">
+                刷新状态
+              </button>
+            </div>
           </div>
 
           <div v-else-if="currentTab === 'skills'" class="space-y-7">
@@ -747,11 +1198,58 @@ function selectBehaviorLevel(id: BehaviorLevelId) {
             <input v-model="providerBaseUrl" class="h-10 w-full rounded-[12px] border border-[#E5E7EB] bg-[#F9FAFB] px-3 text-[13px] text-black/80 outline-none transition-colors focus:border-[#726FFF]" :placeholder="editingProvider.id === 'custom-openai-compatible' ? '例如：https://api.example.com/v1' : '可留空以使用默认端点'">
           </div>
           <div v-if="editingProvider.supportsModel">
+            <label class="mb-1.5 block text-[12px] font-medium text-black/74">模型列表</label>
+            <div class="rounded-[12px] border border-[#E5E7EB] bg-[#F9FAFB] p-3">
+              <div class="flex gap-2">
+                <input
+                  v-model="providerModelDraft"
+                  class="h-10 flex-1 rounded-[10px] border border-[#E5E7EB] bg-white px-3 text-[13px] text-black/80 outline-none transition-colors focus:border-[#726FFF]"
+                  placeholder="例如：deepseek-chat"
+                  @keydown.enter.prevent="addProviderModel"
+                >
+                <button
+                  class="rounded-[10px] border border-[#D8DAE6] bg-white px-3 py-2 text-[12px] font-medium text-[#726FFF] transition-colors hover:bg-[#F8F7FF] disabled:cursor-not-allowed disabled:opacity-60"
+                  :disabled="!providerModelDraft.trim()"
+                  @click="addProviderModel"
+                >
+                  添加模型
+                </button>
+              </div>
+              <div v-if="providerModels.length" class="mt-3 flex flex-wrap gap-2">
+                <div
+                  v-for="model in providerModels"
+                  :key="model"
+                  class="inline-flex items-center gap-2 rounded-[999px] border border-[#D8DAE6] bg-white px-3 py-1.5 text-[12px] text-black/72"
+                >
+                  <span>{{ model }}</span>
+                  <button class="flex h-4 w-4 items-center justify-center rounded-full text-black/36 transition-colors hover:bg-[#FEF2F2] hover:text-[#EF4444]" @click="removeProviderModel(model)">
+                    <X class="h-3 w-3" />
+                  </button>
+                </div>
+              </div>
+              <div v-else class="mt-3 rounded-[10px] bg-white px-3 py-2 text-[11px] text-black/42">
+                还没有添加模型，先输入一个 model ID 再点“添加模型”。
+              </div>
+            </div>
+            <div class="mt-2 text-[10px] text-black/42">支持保存多个模型，默认模型会从已添加列表里单独选择。</div>
+          </div>
+          <div v-if="editingProvider.supportsModel && providerModels.length">
             <label class="mb-1.5 block text-[12px] font-medium text-black/74">默认模型</label>
-            <input v-model="providerModel" class="h-10 w-full rounded-[12px] border border-[#E5E7EB] bg-[#F9FAFB] px-3 text-[13px] text-black/80 outline-none transition-colors focus:border-[#726FFF]" placeholder="例如：gpt-4o">
+            <div class="space-y-1.5">
+              <button
+                v-for="model in providerModels"
+                :key="model"
+                class="flex w-full items-center gap-3 rounded-[12px] border px-3 py-2 text-left text-[12px] transition-all"
+                :class="providerDefaultModel === model ? 'border-[#726FFF] bg-[#F8F7FF]' : 'border-[#E5E7EB] bg-[#F9FAFB] hover:border-[#726FFF]/36'"
+                @click="providerDefaultModel = model"
+              >
+                <div :class="providerDefaultModel === model ? 'border-[#726FFF]' : 'border-[#D6D9E4]'" class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2"><div v-if="providerDefaultModel === model" class="h-1.5 w-1.5 rounded-full bg-[#726FFF]" /></div>
+                <span class="truncate text-black/82">{{ model }}</span>
+              </button>
+            </div>
           </div>
           <div class="rounded-[14px] bg-[#F9FAFB] px-3 py-2 text-[10px] leading-4.5 text-black/42">
-            {{ providerMeta(editingProvider.id) }}
+            {{ editingProviderSummary ? providerInstanceMeta(editingProviderSummary) : providerMeta(editingProvider.id) }}
           </div>
           <div v-if="providerError" class="rounded-[12px] bg-[#FEF2F2] px-3 py-2 text-[11px] text-[#DC2626]">
             {{ providerError }}
