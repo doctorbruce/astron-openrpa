@@ -233,7 +233,7 @@ onBeforeUnmount(() => {
         @click="toggleCreateMenu"
       >
         <Plus class="h-4 w-4" />
-        <span>新建模板</span>
+        <span>新建</span>
       </Button>
       <div
         v-if="createMenuOpen"
