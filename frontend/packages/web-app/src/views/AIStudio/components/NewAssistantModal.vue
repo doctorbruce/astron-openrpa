@@ -358,9 +358,9 @@ onMounted(() => {
                 :data-testid="`new-assistant-skill-${skill.id}`"
                 type="button"
                 :class="skills.includes(skill.id)
-                  ? 'border-[var(--color-primary)] bg-[linear-gradient(135deg,#726FFF,#5D59FF)] text-white shadow-[0_8px_18px_rgba(114,111,255,0.16)]'
+                  ? 'border-[#726FFF] bg-[#726FFF] text-white'
                   : 'border-[var(--ai-line)] bg-white text-black/58 hover:border-[var(--color-primary)]/30 hover:bg-[#FAFAFF]'"
-                class="flex h-10 w-full items-center gap-2.5 rounded-[14px] border px-3 text-left transition-colors"
+                class="flex h-10 w-full items-center gap-2.5 rounded-[14px] border px-3 text-left transition-none"
                 :title="skill.description || skill.name"
                 @click="toggleSkill(skill.id)"
               >

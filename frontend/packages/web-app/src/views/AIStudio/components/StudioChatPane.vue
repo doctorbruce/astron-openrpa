@@ -32,6 +32,8 @@ const props = defineProps<{
   session: StudioSessionDetail
   workspaceOpen: boolean
   invitedAssistants: string[]
+  availableSkills: ComposerSkillOption[]
+  mentionOptions: ComposerMentionOption[]
   sessionPending: boolean
   isAiTyping?: boolean
   isCardPending: (cardId: string) => boolean
@@ -134,19 +136,6 @@ const editingSessionTitle = ref(false)
 const sessionTitleDraft = ref('')
 const pendingAutoScroll = ref(false)
 
-const skillOptions: ComposerSkillOption[] = [
-  { id: 'summary', label: '总结', badge: '总', description: '快速归纳当前会话重点、风险与下一步。' },
-  { id: 'report', label: '生成报告', badge: '报', description: '整理结构化报告、recap 或对外摘要。' },
-  { id: 'code', label: '分析代码', badge: '码', description: '聚焦代码、日志与修复建议的分析路径。' },
-]
-
-const mentionOptions: ComposerMentionOption[] = [
-  { id: 'office', label: '办公助手', badge: '办', description: '会议纪要、邮件草稿和行动项整理。' },
-  { id: 'finance', label: '财务助手', badge: '财', description: '财务分析、报表和异常项核对。' },
-  { id: 'code', label: '代码助手', badge: '代', description: '接口、Bug、补丁和代码审查。' },
-  { id: 'data', label: '数据分析师', badge: '数', description: '增长分析、漏斗拆解和图表洞察。' },
-]
-
 const displayedMessages = computed(() => props.session.messages)
 const displayedTimeline = computed(() => {
   const messageItems = props.session.messages
@@ -168,6 +157,8 @@ const displayedTimeline = computed(() => {
 
   return [...messageItems, ...cardItems].sort((left, right) => left.order - right.order)
 })
+const skillOptions = computed(() => props.availableSkills || [])
+const mentionOptions = computed(() => props.mentionOptions || [])
 const displayedAttachments = computed(() => localAttachments.value)
 const canSend = computed(() => draft.value.trim().length > 0 || displayedAttachments.value.length > 0)
 const composerInteractive = computed(() =>
@@ -178,7 +169,14 @@ const composerInteractive = computed(() =>
   || selectedMentionOptions.value.length > 0
   || selectedSkillOptions.value.length > 0,
 )
-const inputPlaceholder = computed(() => props.session.inputPlaceholder || '输入消息，或使用 / 技能、@ 提及助手')
+const inputPlaceholder = computed(() => {
+  const basePlaceholder = props.session.inputPlaceholder || '输入消息'
+  if (isGroupSession())
+    return `${basePlaceholder}，或使用 / 技能、@ 提及助手`
+  if (skillOptions.value.length > 0)
+    return `${basePlaceholder}，或使用 / 技能`
+  return basePlaceholder
+})
 const composerPlaceholder = computed(() => inputPlaceholder.value)
 const groupParticipants = computed(() => [...new Set([...participantIds(), ...props.invitedAssistants])])
 const groupHeaderParticipants = computed(() => groupParticipants.value.slice(0, 2))
@@ -241,7 +239,7 @@ const filteredMentionOptions = computed(() => {
     return []
 
   const query = activeTrigger.value.query.trim().toLocaleLowerCase()
-  return mentionOptions.filter(option =>
+  return mentionOptions.value.filter(option =>
     !query
     || option.label.toLocaleLowerCase().includes(query)
     || option.id.includes(query),
@@ -253,7 +251,7 @@ const filteredSkillOptions = computed(() => {
     return []
 
   const query = activeTrigger.value.query.trim().toLocaleLowerCase()
-  return skillOptions.filter(option =>
+  return skillOptions.value.filter(option =>
     !query
     || option.label.toLocaleLowerCase().includes(query)
     || option.description.toLocaleLowerCase().includes(query)
@@ -265,12 +263,12 @@ const activeMenuOptions = computed(() => activeTrigger.value?.type === 'mention'
   ? filteredMentionOptions.value
   : filteredSkillOptions.value)
 
-const selectedMentionOptions = computed(() => mentionOptions.filter(option =>
-  extractComposerTokenIds(mentionOptions, value => `@${value.label}`).includes(option.id),
+const selectedMentionOptions = computed(() => mentionOptions.value.filter(option =>
+  extractComposerTokenIds(mentionOptions.value, value => `@${value.label}`).includes(option.id),
 ))
 
-const selectedSkillOptions = computed(() => skillOptions.filter(option =>
-  extractComposerTokenIds(skillOptions, value => `/${value.label}`).includes(option.id),
+const selectedSkillOptions = computed(() => skillOptions.value.filter(option =>
+  extractComposerTokenIds(skillOptions.value, value => `/${value.label}`).includes(option.id),
 ))
 
 watch(
@@ -423,6 +421,10 @@ function focusTextarea(position = draft.value.length) {
 
 function openComposerPicker(type: 'mention' | 'skill') {
   if (props.sessionPending)
+    return
+  if (type === 'mention' && !mentionOptions.value.length)
+    return
+  if (type === 'skill' && !skillOptions.value.length)
     return
 
   const marker = type === 'mention' ? '@' : '/'
@@ -624,33 +626,11 @@ function participantIds() {
 }
 
 function participantName(id: string) {
-  if (id === 'coordinator')
-    return '主 Agent'
-  if (id === 'office')
-    return '办公助手'
-  if (id === 'finance')
-    return '财务助手'
-  if (id === 'code')
-    return '代码助手'
-  if (id === 'data')
-    return '数据分析师'
-  if (id === 'audit-group')
-    return '年报审计协作'
-  return '页面助手'
+  return mentionOptions.value.find(option => option.id === id)?.label || id
 }
 
 function participantBadge(id: string) {
-  if (id === 'office')
-    return '办'
-  if (id === 'finance')
-    return '财'
-  if (id === 'code')
-    return '码'
-  if (id === 'data')
-    return '数'
-  if (id === 'audit-group')
-    return '协'
-  return '页'
+  return mentionOptions.value.find(option => option.id === id)?.badge || id.slice(0, 1).toUpperCase() || '助'
 }
 
 function participantAvatarTone(id: string) {
@@ -1358,6 +1338,7 @@ function onDraftKeydown(event: KeyboardEvent) {
 
           <div class="flex items-center gap-1.5 self-end">
             <Button
+              v-if="skillOptions.length > 0"
               data-testid="composer-skill-button"
               variant="soft"
               size="sm"
@@ -1372,6 +1353,7 @@ function onDraftKeydown(event: KeyboardEvent) {
             </Button>
 
             <Button
+              v-if="isGroupSession() && mentionOptions.length > 0"
               data-testid="composer-mention-button"
               variant="secondary"
               size="sm"

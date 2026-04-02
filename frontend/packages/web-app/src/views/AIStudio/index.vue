@@ -16,7 +16,57 @@ import { useAIStudioStore } from '@/stores/useAIStudioStore'
 const route = useRoute()
 const router = useRouter()
 const aiStudioStore = useAIStudioStore()
-const { activeSession, activeSessionLoading, activeSurface, assistantModalMode, assistantTemplateKind, editingAssistant, invitedAssistants, isActiveSessionPending, isAiTyping, newSessionAssistant, newSessionParticipantCandidates, showInviteAssistant, showNewAssistant, showNewSession, workspaceOpen } = storeToRefs(aiStudioStore)
+const { activeSession, activeSessionLoading, activeSurface, assistantGroups, assistantModalMode, assistantTemplateKind, editingAssistant, invitedAssistants, isActiveSessionPending, isAiTyping, newSessionAssistant, newSessionParticipantCandidates, showInviteAssistant, showNewAssistant, showNewSession, workspaceOpen } = storeToRefs(aiStudioStore)
+const assistantOptionCatalog = computed(() =>
+  assistantGroups.value.flatMap(group => group.assistants.map(assistant => ({
+    id: assistant.id,
+    name: assistant.name,
+    badge: assistant.badge,
+    skills: assistant.skills || [],
+    sessions: assistant.sessions,
+  }))),
+)
+const activeSessionAssistant = computed(() => {
+  const sessionId = activeSession.value?.id
+  if (!sessionId)
+    return null
+
+  return assistantOptionCatalog.value.find(assistant =>
+    assistant.sessions.some(session => session.id === sessionId),
+  ) || null
+})
+const composerSkillOptions = computed(() =>
+  (activeSessionAssistant.value?.skills || []).map((skillId) => ({
+    id: skillId,
+    label: skillId,
+    badge: skillId.slice(0, 1).toUpperCase() || '技',
+    description: `当前助手已连接技能：${skillId}`,
+  })),
+)
+const composerMentionOptions = computed(() => {
+  if (activeSession.value?.mode !== 'group')
+    return []
+
+  const participantIds = [...new Set(activeSession.value.participantAssistantIds || [])]
+  return participantIds.map((id) => {
+    const matched = assistantOptionCatalog.value.find(assistant => assistant.id === id)
+    if (matched) {
+      return {
+        id,
+        label: matched.name,
+        badge: matched.badge || matched.name.slice(0, 1).toUpperCase() || '助',
+        description: `提及 ${matched.name}`,
+      }
+    }
+
+    return {
+      id,
+      label: id,
+      badge: id.slice(0, 1).toUpperCase() || '助',
+      description: `提及 ${id}`,
+    }
+  })
+})
 const groupTemplateParticipants = computed(() => {
   const assistant = newSessionAssistant.value
   if (!assistant || assistant.status !== '群聊')
@@ -94,6 +144,8 @@ async function handleCreateSession(payload: {
     >
       <template v-if="activeSurface === 'main'">
         <StudioChatPane
+          :available-skills="composerSkillOptions"
+          :mention-options="composerMentionOptions"
           :invited-assistants="invitedAssistants"
           :session="activeSession"
           :session-pending="isActiveSessionPending"
@@ -121,6 +173,8 @@ async function handleCreateSession(payload: {
       </template>
       <template v-else>
         <StudioChatPane
+          :available-skills="composerSkillOptions"
+          :mention-options="composerMentionOptions"
           :invited-assistants="invitedAssistants"
           :session="activeSession"
           :session-pending="isActiveSessionPending"
