@@ -67,23 +67,6 @@ function toDesktopAttachment(attachment: StudioMessageAttachment) {
   }
 }
 
-function sameAttachmentList(
-  left: StudioMessageAttachment[] | undefined,
-  right: StudioMessageAttachment[] | undefined,
-) {
-  const leftItems = left || []
-  const rightItems = right || []
-  if (leftItems.length !== rightItems.length)
-    return false
-  return leftItems.every((item, index) => {
-    const candidate = rightItems[index]
-    return candidate
-      && candidate.name === item.name
-      && candidate.mime === item.mime
-      && candidate.url === item.url
-  })
-}
-
 function unsupportedRuntimeMutation(name: string): never {
   throw new Error(`AI Studio runtime does not support ${name} yet`)
 }
@@ -99,34 +82,13 @@ export const opencodeAIStudioProvider: AIStudioProvider = {
     return fetchSessionDetail(sessionId, options)
   },
 
-  sendMessage: async (payload: AIStudioSendMessagePayload): Promise<AIStudioSessionMutationResult> => {
+  sendMessage: async (payload: AIStudioSendMessagePayload): Promise<void> => {
     const api = getOpencodeDesktopApi()
     await api.sendMessage({
       sessionID: payload.sessionId,
       text: payload.content,
       attachments: payload.attachments?.map(toDesktopAttachment),
     })
-    const session = await fetchSessionDetail(payload.sessionId, { includeWorkspace: false })
-    // Opencode processes messages asynchronously; the user message may not yet
-    // be persisted when we fetch right after sendMessage. Add it optimistically
-    // so it is immediately visible in the UI.
-    const latestUserMessage = [...session.messages].reverse().find(message => message.role === 'user')
-    const alreadyPresent = !!latestUserMessage
-      && latestUserMessage.content === payload.content
-      && sameAttachmentList(latestUserMessage.attachments, payload.attachments)
-    if (!alreadyPresent) {
-      session.messages = [
-        ...session.messages,
-        {
-          id: `user-optimistic-${Date.now()}`,
-          role: 'user',
-          content: payload.content,
-          attachments: payload.attachments ? [...payload.attachments] : undefined,
-          time: '刚刚',
-        },
-      ]
-    }
-    return { session }
   },
 
   createSession: async (payload: AIStudioCreateSessionPayload): Promise<AIStudioSessionMutationResult> => {

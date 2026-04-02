@@ -337,7 +337,7 @@ onMounted(() => {
               {{ availableSkills.length ? '没有匹配的技能' : '还没有可用技能，请先到设置中心导入' }}
             </div>
 
-            <div v-else class="space-y-2">
+            <div v-else class="space-y-1.5">
               <button
                 v-for="skill in visibleSkills"
                 :key="skill.id"
@@ -346,16 +346,14 @@ onMounted(() => {
                 :class="skills.includes(skill.id)
                   ? 'border-[var(--color-primary)] bg-[linear-gradient(135deg,#726FFF,#5D59FF)] text-white shadow-[0_8px_18px_rgba(114,111,255,0.16)]'
                   : 'border-[var(--ai-line)] bg-white text-black/58 hover:border-[var(--color-primary)]/30 hover:bg-[#FAFAFF]'"
-                class="flex w-full items-start gap-3 rounded-[14px] border px-3 py-2.5 text-left transition-all"
+                class="flex h-10 w-full items-center gap-2.5 rounded-[14px] border px-3 text-left transition-colors"
+                :title="skill.description || skill.name"
                 @click="toggleSkill(skill.id)"
               >
-                <div class="mt-0.5 rounded-[8px] bg-black/5 px-1.5 py-0.5 text-[9px] font-semibold" :class="skills.includes(skill.id) ? 'bg-white/18 text-white/88' : 'text-black/42'">
+                <div class="rounded-[8px] bg-black/5 px-1.5 py-0.5 text-[9px] font-semibold" :class="skills.includes(skill.id) ? 'bg-white/18 text-white/88' : 'text-black/42'">
                   {{ skill.id }}
                 </div>
-                <div class="min-w-0 flex-1">
-                  <div class="text-[11px] font-medium">{{ skill.name }}</div>
-                  <div v-if="skill.description" class="mt-1 text-[10px] leading-4 opacity-80">{{ skill.description }}</div>
-                </div>
+                <div class="min-w-0 flex-1 truncate text-[11px] font-medium leading-4">{{ skill.name }}</div>
               </button>
             </div>
           </ScrollArea>

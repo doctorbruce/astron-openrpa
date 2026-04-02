@@ -129,6 +129,7 @@ export function createSidecarManager(options: SidecarManagerOptions = {}): Sidec
               env: {
                 ...process.env,
                 OPENCODE_CLIENT: 'desktop',
+                OPENCODE_DISABLE_EXTERNAL_SKILLS: '1',
                 OPENCODE_SERVER_USERNAME: credentials.username,
                 OPENCODE_SERVER_PASSWORD: credentials.password,
                 HOME: isolatedPaths.root,

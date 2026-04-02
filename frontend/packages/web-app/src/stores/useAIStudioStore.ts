@@ -13,6 +13,7 @@ import type {
   StudioAssistant,
   StudioAssistantGroup,
   StudioCollaborationMode,
+  StudioMessage,
   StudioSession,
   StudioSessionDetail,
 } from '@/views/AIStudio/types'
@@ -620,16 +621,53 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
   async function sendMessage(payload: Omit<AIStudioSendMessagePayload, 'sessionId'>) {
     if (!activeSessionId.value)
       return null
-    return runMutation(
-      {
-        sessionId: activeSessionId.value,
-        kind: 'message',
-      },
-      () => provider.sendMessage({
-        sessionId: activeSessionId.value,
+
+    const sessionId = activeSessionId.value
+    const optimisticMessage: StudioMessage = {
+      id: `user-optimistic-${Date.now()}`,
+      role: 'user',
+      content: payload.content.trim(),
+      attachments: payload.attachments ? [...payload.attachments] : undefined,
+      time: '刚刚',
+    }
+
+    pendingMutation.value = {
+      sessionId,
+      kind: 'message',
+    }
+    errorMessage.value = ''
+
+    if (sessionMap.value[sessionId]) {
+      mutateSessionDetail(sessionId, session => ({
+        ...session,
+        messages: [...session.messages, optimisticMessage],
+      }))
+      touchSession(sessionId)
+      markSessionActive(sessionId)
+      isAiTyping.value = true
+    }
+
+    try {
+      await provider.sendMessage({
+        sessionId,
         ...payload,
-      }),
-    )
+      })
+      return sessionMap.value[sessionId] || null
+    }
+    catch (error) {
+      if (sessionMap.value[sessionId]) {
+        mutateSessionDetail(sessionId, session => ({
+          ...session,
+          messages: session.messages.filter(message => message.id !== optimisticMessage.id),
+        }))
+      }
+      isAiTyping.value = false
+      errorMessage.value = error instanceof Error ? error.message : 'AI Studio 交互提交失败'
+      throw error
+    }
+    finally {
+      pendingMutation.value = null
+    }
   }
 
   async function submitChoiceForm(payload: Omit<AIStudioChoiceSubmissionPayload, 'sessionId'>) {

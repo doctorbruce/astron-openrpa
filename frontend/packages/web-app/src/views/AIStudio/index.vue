@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
-import { computed, onBeforeUnmount, onMounted, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AutomationTaskView from './components/AutomationTaskView.vue'
@@ -16,7 +16,6 @@ import { useAIStudioStore } from '@/stores/useAIStudioStore'
 const route = useRoute()
 const router = useRouter()
 const aiStudioStore = useAIStudioStore()
-const routeDefaultSessionId = ''
 const { activeSession, activeSessionLoading, activeSurface, assistantModalMode, assistantTemplateKind, editingAssistant, invitedAssistants, isActiveSessionPending, isAiTyping, newSessionAssistant, newSessionParticipantCandidates, showInviteAssistant, showNewAssistant, showNewSession, workspaceOpen } = storeToRefs(aiStudioStore)
 const groupTemplateParticipants = computed(() => {
   const assistant = newSessionAssistant.value
@@ -34,16 +33,6 @@ const groupTemplateParticipants = computed(() => {
     }
   })
 })
-
-const activeSessionId = computed(() => String(route.query.sessionId || routeDefaultSessionId))
-
-watch(
-  activeSessionId,
-  (sessionId) => {
-    void aiStudioStore.ensureInitialized(sessionId)
-  },
-  { immediate: true },
-)
 
 onMounted(() => {
   document.body.classList.add('ai-assistant-preview')
