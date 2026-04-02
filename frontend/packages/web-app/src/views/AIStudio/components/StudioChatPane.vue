@@ -424,8 +424,10 @@ function openComposerPicker(type: 'mention' | 'skill') {
     return
   if (type === 'mention' && !mentionOptions.value.length)
     return
-  if (type === 'skill' && !skillOptions.value.length)
+  if (type === 'skill' && !skillOptions.value.length) {
+    message.info('当前助手还没有配置可用技能')
     return
+  }
 
   const marker = type === 'mention' ? '@' : '/'
   const textarea = textareaRef.value
@@ -1338,14 +1340,17 @@ function onDraftKeydown(event: KeyboardEvent) {
 
           <div class="flex items-center gap-1.5 self-end">
             <Button
-              v-if="skillOptions.length > 0"
               data-testid="composer-skill-button"
               variant="soft"
               size="sm"
               class="h-8 rounded-full border-0 px-2.5 text-[11px] shadow-none hover:translate-y-0"
+              :disabled="skillOptions.length === 0"
               :class="skillButtonActive()
                 ? 'bg-[rgba(114,111,255,0.12)] text-[#726FFF] hover:bg-[rgba(114,111,255,0.18)]'
-                : 'bg-[rgba(255,255,255,0.72)] text-black/62 hover:bg-[rgba(255,255,255,0.96)] hover:text-black/74'"
+                : skillOptions.length === 0
+                  ? 'bg-[rgba(255,255,255,0.56)] text-black/28'
+                  : 'bg-[rgba(255,255,255,0.72)] text-black/62 hover:bg-[rgba(255,255,255,0.96)] hover:text-black/74'"
+              :title="skillOptions.length === 0 ? '当前助手未配置技能' : '选择当前助手可用技能'"
               @click="openComposerPicker('skill')"
             >
               <WandSparkles class="h-3.5 w-3.5" />

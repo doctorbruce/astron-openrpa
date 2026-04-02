@@ -71,6 +71,25 @@ function unsupportedRuntimeMutation(name: string): never {
   throw new Error(`AI Studio runtime does not support ${name} yet`)
 }
 
+function normalizeSkillNames(skills?: string[]) {
+  return [...new Set((skills || []).map(skill => skill.trim()).filter(Boolean))]
+}
+
+function buildSkillReminder(skills?: string[]) {
+  const selectedSkills = normalizeSkillNames(skills)
+  if (selectedSkills.length === 0)
+    return ''
+
+  const skillList = selectedSkills.map(skill => `"${skill}"`).join(', ')
+  return [
+    '<system-reminder>',
+    `The user wants you to use the following skill${selectedSkills.length > 1 ? 's' : ''} for this request if relevant: ${skillList}.`,
+    'If appropriate, load the relevant skill with the skill tool before continuing.',
+    '</system-reminder>',
+    '',
+  ].join('\n')
+}
+
 export const opencodeAIStudioProvider: AIStudioProvider = {
   getBootstrap: async (): Promise<AIStudioBootstrap> => {
     const api = getOpencodeDesktopApi()
@@ -84,9 +103,10 @@ export const opencodeAIStudioProvider: AIStudioProvider = {
 
   sendMessage: async (payload: AIStudioSendMessagePayload): Promise<void> => {
     const api = getOpencodeDesktopApi()
+    const skillReminder = buildSkillReminder(payload.skills)
     await api.sendMessage({
       sessionID: payload.sessionId,
-      text: payload.content,
+      text: `${skillReminder}${payload.content}`.trim(),
       attachments: payload.attachments?.map(toDesktopAttachment),
     })
   },
