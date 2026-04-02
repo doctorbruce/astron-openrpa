@@ -52,6 +52,7 @@ export interface StudioAssistant {
   skills?: StudioAssistantSkill[]
   groupParticipantAssistantIds?: string[]
   groupCollaborationMode?: StudioCollaborationMode
+  isBuiltin?: boolean // 新增：标识官方预置助手
   sessions: StudioSession[]
 }
 
