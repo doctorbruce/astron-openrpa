@@ -64,8 +64,17 @@ async function handleDeleteAssistant(assistantId: string) {
   }
 }
 
-function handleOpenNewSession(assistantId: string) {
-  aiStudioStore.openNewSession(assistantId)
+async function handleOpenNewSession(assistantId: string) {
+  aiStudioStore.openSurface('main')
+  const sessionId = await aiStudioStore.createSessionForAssistant(assistantId)
+  if (!sessionId)
+    return
+  await router.replace({
+    query: {
+      ...route.query,
+      sessionId,
+    },
+  })
 }
 
 watch(

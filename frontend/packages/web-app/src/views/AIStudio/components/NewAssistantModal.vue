@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { Bot, Search, Users, Wrench, Zap } from 'lucide-vue-next'
+import { Bot, FolderOpen, Search, Users, Wrench, Zap } from 'lucide-vue-next'
 import { computed, onMounted, ref, watch } from 'vue'
 
 import { Input } from '@/components/ui/input'
@@ -30,6 +30,11 @@ type DesktopSkillState = {
   error: string | null
 }
 
+type WorkspacePickerResult = {
+  canceled: boolean
+  path: string | null
+}
+
 let cachedSkillCatalog: ManagedSkillRecord[] | null = null
 let cachedSkillsUnavailable = false
 let cachedSkillsError = ''
@@ -50,6 +55,7 @@ const emit = defineEmits<{
   (e: 'close'): void
   (e: 'submit', payload: {
     name: string
+    workspacePath: string
     persona: string
     capabilities: string
     skills: string[]
@@ -60,6 +66,7 @@ const emit = defineEmits<{
 }>()
 
 const name = ref('')
+const workspacePath = ref('')
 const persona = ref('')
 const capabilities = ref('')
 const skillSearch = ref('')
@@ -117,9 +124,10 @@ const visibleSkills = computed(() => {
 
 function syncForm() {
   name.value = props.assistant?.name || ''
+  workspacePath.value = props.assistant?.workspacePath || ''
   persona.value = props.assistant?.persona || ''
   capabilities.value = props.assistant?.capabilities || ''
-  skills.value = props.assistant?.skills ? [...props.assistant.skills] : []
+  skills.value = props.assistant?.skillIds ? [...props.assistant.skillIds] : []
   groupParticipants.value = props.assistant?.groupParticipantAssistantIds ? [...props.assistant.groupParticipantAssistantIds] : []
   groupCollaborationMode.value = props.assistant?.groupCollaborationMode || 'auto'
   skillSearch.value = ''
@@ -187,6 +195,23 @@ async function loadSkills() {
   }
 }
 
+async function pickWorkspace() {
+  const api = getDesktopApi()
+  if (!api?.pickWorkspace) {
+    return
+  }
+
+  try {
+    const result = await api.pickWorkspace(workspacePath.value || null) as WorkspacePickerResult
+    if (!result.canceled && result.path) {
+      workspacePath.value = result.path
+    }
+  }
+  catch (error) {
+    skillsError.value = error instanceof Error ? error.message : '选择工作空间失败'
+  }
+}
+
 function toggleSkill(skillId: string) {
   skills.value = skills.value.includes(skillId)
     ? skills.value.filter(item => item !== skillId)
@@ -206,6 +231,7 @@ function handleSubmit() {
     return
   emit('submit', {
     name: name.value.trim(),
+    workspacePath: workspacePath.value.trim(),
     persona: persona.value.trim(),
     capabilities: capabilities.value.trim(),
     skills: [...skills.value],
@@ -237,6 +263,30 @@ onMounted(() => {
           class="h-10 rounded-[16px] border-0 bg-[var(--ai-surface-soft)] text-[13px] shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)]"
           :placeholder="isGroupTemplate ? '例如：财务代码协作评审' : '例如：财务助手、代码审查官'"
         />
+      </div>
+
+      <div class="space-y-1.5">
+        <label class="text-[12px] font-medium text-black/78">工作空间</label>
+        <div class="flex items-center gap-2">
+          <Input
+            v-model="workspacePath"
+            data-testid="assistant-workspace-path-input"
+            class="h-10 flex-1 rounded-[16px] border-0 bg-[var(--ai-surface-soft)] text-[13px] shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)]"
+            placeholder="不填则默认使用 Astron 托管工作空间"
+          />
+          <button
+            type="button"
+            data-testid="assistant-workspace-picker-trigger"
+            class="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-[14px] bg-[var(--ai-surface-soft)] px-3 text-[12px] font-medium text-black/64 shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] transition-colors hover:bg-white"
+            @click="pickWorkspace"
+          >
+            <FolderOpen class="h-3.5 w-3.5" />
+            <span>选择</span>
+          </button>
+        </div>
+        <div class="text-[10px] leading-4 text-black/36">
+          留空时会默认创建到 `AppData\\Roaming\\astron-rpa\\opencode\\workspaces` 下。
+        </div>
       </div>
 
       <div class="flex items-center gap-3">

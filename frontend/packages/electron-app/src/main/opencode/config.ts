@@ -34,6 +34,9 @@ export function buildRuntimeConfigContent(
   assistants: AssistantRecord[] = [],
   groupRooms: GroupRoomRecord[] = [],
   skills: OpencodeSkillRecord[] = [],
+  options: {
+    managedSkillPaths?: string[]
+  } = {},
 ) {
   const skillsById = new Map(skills.map(skill => [skill.id, skill]))
   const skillsByName = new Map(skills.map(skill => [skill.name.trim(), skill]))
@@ -104,6 +107,13 @@ export function buildRuntimeConfigContent(
     $schema: SETTINGS_SCHEMA_URL,
     ...(settings.defaultModel
       ? { model: `${settings.defaultModel.providerId}/${settings.defaultModel.model}` }
+      : {}),
+    ...(options.managedSkillPaths?.length
+      ? {
+          skills: {
+            paths: [...new Set(options.managedSkillPaths.map(item => item.trim()).filter(Boolean))],
+          },
+        }
       : {}),
     ...(Object.keys(provider).length > 0 ? { provider } : {}),
     ...(Object.keys(agent).length > 0 ? { agent } : {}),

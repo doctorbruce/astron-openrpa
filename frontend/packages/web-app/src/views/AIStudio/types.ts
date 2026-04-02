@@ -33,10 +33,17 @@ export interface StudioAssistant {
   workspacePath?: string
   persona?: string
   capabilities?: string
-  skills?: string[]
+  skillIds?: string[]
+  skills?: StudioAssistantSkill[]
   groupParticipantAssistantIds?: string[]
   groupCollaborationMode?: StudioCollaborationMode
   sessions: StudioSession[]
+}
+
+export interface StudioAssistantSkill {
+  id: string
+  name: string
+  description?: string
 }
 
 export interface StudioAssistantGroup {

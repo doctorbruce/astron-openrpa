@@ -36,9 +36,26 @@ const sidecar = createSidecarManager({
       const assistants = await assistantStore.listAssistants()
       const groupRooms = await assistantStore.listGroupRooms()
       const skills = await skillsService.getState()
-      return buildRuntimeConfigContent(settings, assistants, groupRooms, skills.skills)
+      const configContent = buildRuntimeConfigContent(settings, assistants, groupRooms, skills.skills, {
+        managedSkillPaths: skills.storageRoot ? [skills.storageRoot] : [],
+      })
+      try {
+        const parsed = JSON.parse(configContent) as { agent?: Record<string, unknown>; skills?: { paths?: string[] } }
+        logger.info('built opencode runtime config content', {
+          assistantCount: assistants.length,
+          groupRoomCount: groupRooms.length,
+          skillCount: skills.skills.length,
+          agentKeys: Object.keys(parsed.agent || {}).slice(0, 24),
+          skillPaths: parsed.skills?.paths || [],
+        })
+      }
+      catch (error) {
+        logger.warn('failed to summarize runtime config content', error instanceof Error ? error.message : String(error))
+      }
+      return configContent
     }
-    catch {
+    catch (error) {
+      logger.warn('failed to build opencode runtime config content', error instanceof Error ? error.message : String(error))
       return null
     }
   },

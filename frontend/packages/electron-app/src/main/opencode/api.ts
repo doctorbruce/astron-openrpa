@@ -7,8 +7,10 @@ export type RuntimeApi = {
   getSession: (sessionID: string, directory?: string | null) => Promise<OpencodeSessionInfo>
   getSessionMessages: (sessionID: string, directory?: string | null) => Promise<OpencodeMessageRecord[]>
   getSessionStatuses: () => Promise<Record<string, OpencodeSessionStatus>>
+  disposeGlobal: () => Promise<void>
   createSession: (input: CreateSessionInput) => Promise<OpencodeSessionInfo>
   deleteSession: (sessionID: string, directory?: string | null) => Promise<void>
+  abortSession: (sessionID: string, directory?: string | null) => Promise<void>
   sendMessage: (input: SendMessageInput) => Promise<void>
   openEventStream: (signal: AbortSignal) => Promise<Response>
 }
@@ -21,6 +23,9 @@ export function createRuntimeApi(runtime: Pick<SidecarManager, 'getConnection'>)
     getSessionMessages: (sessionID, directory) =>
       requestJson<OpencodeMessageRecord[]>(`/session/${encodeURIComponent(sessionID)}/message`, { directory }),
     getSessionStatuses: () => requestJson<Record<string, OpencodeSessionStatus>>('/session/status'),
+    disposeGlobal: async () => {
+      await requestVoid('/global/dispose', { method: 'POST' })
+    },
     createSession: (input) =>
       requestJson<OpencodeSessionInfo>('/session', {
         method: 'POST',
@@ -29,6 +34,9 @@ export function createRuntimeApi(runtime: Pick<SidecarManager, 'getConnection'>)
       }),
     deleteSession: async (sessionID, directory) => {
       await requestVoid(`/session/${encodeURIComponent(sessionID)}`, { method: 'DELETE', directory })
+    },
+    abortSession: async (sessionID, directory) => {
+      await requestVoid(`/session/${encodeURIComponent(sessionID)}/abort`, { method: 'POST', directory })
     },
     sendMessage: async (input) => {
       await requestVoid(`/session/${encodeURIComponent(input.sessionID)}/prompt_async`, {

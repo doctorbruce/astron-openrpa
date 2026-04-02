@@ -231,6 +231,7 @@ export type DesktopRuntimeEvent =
   | { type: "session.created" | "session.updated" | "session.deleted"; properties: { info: OpencodeSessionInfo } }
   | { type: "session.status"; properties: { sessionID: string; status: OpencodeSessionStatus } }
   | { type: "session.idle"; properties: { sessionID: string } }
+  | { type: "session.error"; properties: { sessionID?: string; error: { name: string; data?: { message?: string; [key: string]: unknown } } } }
   | { type: "message.updated"; properties: { info: OpencodeMessage } }
   | { type: "message.removed"; properties: { sessionID: string; messageID: string } }
   | { type: "message.part.updated"; properties: { part: OpencodePart } }

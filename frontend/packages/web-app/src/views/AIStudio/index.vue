@@ -1,27 +1,24 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, onMounted } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
 
 import AutomationTaskView from './components/AutomationTaskView.vue'
 import ArtifactPanel from './components/ArtifactPanel.vue'
 import InviteAssistantModal from './components/InviteAssistantModal.vue'
 import NewAssistantModal from './components/NewAssistantModal.vue'
-import NewSessionModal from './components/NewSessionModal.vue'
 import SettingsCenterView from './components/SettingsCenterView.vue'
 import StudioChatPane from './components/StudioChatPane.vue'
 import DiffuseLight from '@/components/Illustration/DiffuseLight.vue'
 import { useAIStudioStore } from '@/stores/useAIStudioStore'
 
-const route = useRoute()
-const router = useRouter()
 const aiStudioStore = useAIStudioStore()
-const { activeSession, activeSessionLoading, activeSurface, assistantGroups, assistantModalMode, assistantTemplateKind, editingAssistant, invitedAssistants, isActiveSessionPending, isAiTyping, newSessionAssistant, newSessionParticipantCandidates, showInviteAssistant, showNewAssistant, showNewSession, workspaceOpen } = storeToRefs(aiStudioStore)
+const { activeSession, activeSessionLoading, activeSurface, assistantGroups, assistantModalMode, assistantTemplateKind, editingAssistant, invitedAssistants, isActiveSessionPending, isAiTyping, newSessionParticipantCandidates, showInviteAssistant, showNewAssistant, workspaceOpen } = storeToRefs(aiStudioStore)
 const assistantOptionCatalog = computed(() =>
   assistantGroups.value.flatMap(group => group.assistants.map(assistant => ({
     id: assistant.id,
     name: assistant.name,
     badge: assistant.badge,
+    skillIds: assistant.skillIds || [],
     skills: assistant.skills || [],
     sessions: assistant.sessions,
   }))),
@@ -36,11 +33,11 @@ const activeSessionAssistant = computed(() => {
   ) || null
 })
 const composerSkillOptions = computed(() =>
-  (activeSessionAssistant.value?.skills || []).map((skillId) => ({
-    id: skillId,
-    label: skillId,
-    badge: skillId.slice(0, 1).toUpperCase() || '技',
-    description: `当前助手已连接技能：${skillId}`,
+  (activeSessionAssistant.value?.skills || []).map((skill) => ({
+    id: skill.name,
+    label: skill.name,
+    badge: skill.name.slice(0, 1).toUpperCase() || '技',
+    description: skill.description || `当前助手已连接技能：${skill.name}`,
   })),
 )
 const composerMentionOptions = computed(() => {
@@ -67,23 +64,6 @@ const composerMentionOptions = computed(() => {
     }
   })
 })
-const groupTemplateParticipants = computed(() => {
-  const assistant = newSessionAssistant.value
-  if (!assistant || assistant.status !== '群聊')
-    return []
-  const candidateMap = new Map(newSessionParticipantCandidates.value.map(candidate => [candidate.id, candidate]))
-  return (assistant.groupParticipantAssistantIds || []).map((id) => {
-    const matched = candidateMap.get(id)
-    if (matched)
-      return matched
-    return {
-      id,
-      name: id,
-      badge: id.slice(0, 1).toUpperCase(),
-    }
-  })
-})
-
 onMounted(() => {
   document.body.classList.add('ai-assistant-preview')
 })
@@ -98,6 +78,7 @@ function handleCloseSurface() {
 
 async function handleAssistantSubmit(payload: {
   name: string
+  workspacePath: string
   persona: string
   capabilities: string
   skills: string[]
@@ -111,21 +92,6 @@ async function handleAssistantSubmit(payload: {
   }
 
   await aiStudioStore.createAssistant(payload)
-}
-
-async function handleCreateSession(payload: {
-  workspacePath: string
-  sessionTitle?: string
-}) {
-  const sessionId = await aiStudioStore.createSession(payload)
-  if (!sessionId)
-    return
-  void router.replace({
-    query: {
-      ...route.query,
-      sessionId,
-    },
-  })
 }
 </script>
 
@@ -154,6 +120,7 @@ async function handleCreateSession(payload: {
           :is-action-pending="aiStudioStore.isActionPending"
           :is-card-pending="aiStudioStore.isCardPending"
           @open-invite="aiStudioStore.openInviteAssistant()"
+          @abort-session="aiStudioStore.abortSession()"
           @rename-session="aiStudioStore.renameSession($event.sessionId, $event.title)"
           @send-message="aiStudioStore.sendMessage($event)"
           @submit-action="aiStudioStore.submitCardAction($event)"
@@ -182,6 +149,7 @@ async function handleCreateSession(payload: {
           :is-action-pending="aiStudioStore.isActionPending"
           :is-card-pending="aiStudioStore.isCardPending"
           class="pointer-events-none opacity-30 blur-[1px]"
+          @abort-session="aiStudioStore.abortSession()"
           @rename-session="aiStudioStore.renameSession($event.sessionId, $event.title)"
         />
         <SettingsCenterView @close="handleCloseSurface" />
@@ -202,16 +170,6 @@ async function handleCreateSession(payload: {
       :participant-candidates="newSessionParticipantCandidates"
       @close="aiStudioStore.closeNewAssistant()"
       @submit="handleAssistantSubmit"
-    />
-    <NewSessionModal
-      v-if="showNewSession && newSessionAssistant"
-      :assistant-name="newSessionAssistant.name"
-      :default-workspace-path="newSessionAssistant.workspacePath"
-      :is-group-session="newSessionAssistant.status === '群聊'"
-      :group-template-participants="groupTemplateParticipants"
-      :group-template-mode="newSessionAssistant.groupCollaborationMode"
-      @close="aiStudioStore.closeNewSession()"
-      @submit="handleCreateSession"
     />
     <InviteAssistantModal
       v-if="showInviteAssistant"

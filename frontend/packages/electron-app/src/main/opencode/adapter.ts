@@ -1,9 +1,10 @@
-import type { AssistantRecord, GroupRoomRecord } from '../../shared/assistants'
+import type { AssistantRecord, GroupRoomRecord, OpencodeSkillRecord } from '../../shared/assistants'
 import type {
   OpencodeAssistantMessage,
   OpencodeFilePart,
   OpencodeMessageRecord,
   OpencodeSessionInfo,
+  OpencodeSessionStatus,
   OpencodeTextPart,
   OpencodeToolPart,
 } from '../../shared/sessions'
@@ -28,9 +29,16 @@ export type StudioAssistant = {
   workspacePath?: string
   persona?: string
   capabilities?: string
-  skills?: string[]
+  skillIds?: string[]
+  skills?: StudioAssistantSkill[]
   groupParticipantAssistantIds?: string[]
   groupCollaborationMode?: 'auto' | 'pipeline' | 'race' | 'debate'
+}
+
+export type StudioAssistantSkill = {
+  id: string
+  name: string
+  description?: string
 }
 
 export type StudioAssistantGroup = {
@@ -239,11 +247,30 @@ export function toStudioAssistantGroups(
   sessionsByAssistantId: Map<string, OpencodeSessionInfo[]>,
   sessionsByGroupRoomId: Map<string, OpencodeSessionInfo[]>,
   unassignedSessions: OpencodeSessionInfo[],
+  skills: OpencodeSkillRecord[] = [],
 ): StudioAssistantGroup[] {
   const groups: StudioAssistantGroup[] = []
+  const skillsById = new Map(skills.map(skill => [skill.id, skill]))
 
   const singleAssistants: StudioAssistant[] = assistants.map((assistant) => {
     const sessions = sessionsByAssistantId.get(assistant.id) ?? []
+    const resolvedSkills = assistant.skillIds
+      .map((skillId) => {
+        const matched = skillsById.get(skillId)
+        if (!matched) {
+          return {
+            id: skillId,
+            name: skillId,
+          }
+        }
+
+        return {
+          id: matched.id,
+          name: matched.name,
+          description: matched.description || undefined,
+        }
+      })
+      .filter((skill, index, list) => list.findIndex(item => item.id === skill.id) === index)
     return {
       id: assistant.id,
       name: assistant.name,
@@ -252,7 +279,8 @@ export function toStudioAssistantGroups(
       workspacePath: assistant.workspacePath,
       persona: assistant.systemPrompt ?? undefined,
       capabilities: assistant.description ?? undefined,
-      skills: assistant.skillIds.length ? [...assistant.skillIds] : undefined,
+      skillIds: assistant.skillIds.length ? [...assistant.skillIds] : undefined,
+      skills: resolvedSkills.length ? resolvedSkills : undefined,
       sessions: sessions.map((s) => ({
         id: s.id,
         title: s.title || '未命名会话',
@@ -342,6 +370,7 @@ export function resolveDefaultSessionId(sessions: OpencodeSessionInfo[]): string
 export function toStudioSessionDetail(
   session: OpencodeSessionInfo,
   messageRecords: OpencodeMessageRecord[],
+  sessionStatus: OpencodeSessionStatus | undefined,
   assistantName: string = 'AI 助手',
   assistantBadge: string = 'AI',
   workspaceSnapshot?: StudioWorkspaceSnapshot,
@@ -469,14 +498,31 @@ export function toStudioSessionDetail(
           order: seq++,
         })
       }
+
+      const errorText = assistantMsg.error?.data?.message?.trim() || assistantMsg.error?.name?.trim()
+      if (errorText) {
+        chatCards.push({
+          id: `${assistantMsg.id}-error`,
+          type: 'text',
+          content: `执行失败：${errorText}`,
+          tone: 'subtle',
+          assistantName,
+          time: timeStr,
+          order: seq++,
+        })
+      }
     }
   }
+
+  const derivedStatus = sessionStatus?.type === 'busy' ? 'running' : 'idle'
+  const headerTag = derivedStatus === 'running' ? '运行中' : '空闲'
 
   return {
     id: session.id,
     mode: 'regular',
+    status: derivedStatus,
     headerTitle: session.title || '未命名会话',
-    headerTag: '运行中',
+    headerTag,
     headerBadge: assistantBadge,
     assistantName,
     workspacePath: workspaceSnapshot?.workspacePath || session.directory,

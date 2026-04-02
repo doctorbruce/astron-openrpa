@@ -67,9 +67,11 @@ contextBridge.exposeInMainWorld('opencodeApi', {
   createSession: (payload: { title?: string | null; assistantId?: string | null; groupRoomId?: string | null; workspacePath?: string | null }) => ipcRenderer.invoke('opencode:createSession', payload),
   renameSession: (payload: { sessionId: string; title?: string | null }) => ipcRenderer.invoke('opencode:renameSession', payload),
   deleteSession: (sessionId: string) => ipcRenderer.invoke('opencode:deleteSession', sessionId),
+  abortSession: (sessionId: string) => ipcRenderer.invoke('opencode:abortSession', sessionId),
   sendMessage: (payload: {
     sessionID: string
     text: string
+    system?: string | null
     attachments?: Array<{
       id: string
       name: string
@@ -90,6 +92,7 @@ contextBridge.exposeInMainWorld('opencodeApi', {
   saveGroupRoom: (input: unknown) => ipcRenderer.invoke('opencode:saveGroupRoom', input),
   deleteGroupRoom: (id: string) => ipcRenderer.invoke('opencode:deleteGroupRoom', id),
   listSkills: () => ipcRenderer.invoke('opencode:listSkills'),
+  pickWorkspace: (currentPath?: string | null) => ipcRenderer.invoke('opencode:pickWorkspace', currentPath),
   importSkill: () => ipcRenderer.invoke('opencode:importSkill'),
   deleteSkill: (skillId: string) => ipcRenderer.invoke('opencode:deleteSkill', skillId),
   onRuntimeEvent: (listener: (event: unknown) => void) => {

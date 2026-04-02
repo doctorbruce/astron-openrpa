@@ -148,6 +148,10 @@ function applyRuntimeEvent(state: DesktopSessionState, event: DesktopRuntimeEven
       return updateSessionStatus(state, event.properties.sessionID, event.properties.status)
     case 'session.idle':
       return updateSessionStatus(state, event.properties.sessionID, IDLE_SESSION_STATUS)
+    case 'session.error':
+      return event.properties.sessionID
+        ? updateSessionStatus(state, event.properties.sessionID, IDLE_SESSION_STATUS)
+        : state
     case 'message.updated':
       return upsertMessage(state, event.properties.info)
     case 'message.removed':

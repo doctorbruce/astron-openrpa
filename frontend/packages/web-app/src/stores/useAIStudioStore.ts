@@ -28,13 +28,9 @@ type PendingMutation = {
   actionId?: string
 } | null
 
-type CreateSessionPayload = {
-  workspacePath: string
-  sessionTitle?: string
-}
-
 type CreateAssistantPayload = {
   name: string
+  workspacePath?: string
   persona?: string
   capabilities?: string
   skills?: string[]
@@ -99,8 +95,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
   const assistantTemplateKind = ref<'assistant' | 'group'>('assistant')
   const editingAssistantId = ref<string | null>(null)
   const showInviteAssistant = ref(false)
-  const showNewSession = ref(false)
-  const newSessionAssistantId = ref<string | null>(null)
   const initialized = ref(false)
   const loading = ref(false)
   const errorMessage = ref('')
@@ -116,16 +110,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     return sessionMap.value[activeSessionId.value] || null
   })
 
-  const newSessionAssistant = computed(() => {
-    if (!newSessionAssistantId.value)
-      return null
-    for (const group of assistantGroups.value) {
-      const assistant = group.assistants.find(item => item.id === newSessionAssistantId.value)
-      if (assistant)
-        return assistant
-    }
-    return null
-  })
   const newSessionParticipantCandidates = computed(() => {
     const singleGroup = assistantGroups.value.find(group => group.id === 'single')
     return (singleGroup?.assistants || []).map(assistant => ({
@@ -402,16 +386,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     showInviteAssistant.value = false
   }
 
-  function openNewSession(assistantId: string) {
-    newSessionAssistantId.value = assistantId
-    showNewSession.value = true
-  }
-
-  function closeNewSession() {
-    showNewSession.value = false
-    newSessionAssistantId.value = null
-  }
-
   function inviteAssistants(ids: string[]) {
     invitedAssistants.value = [...new Set([...invitedAssistants.value, ...ids])]
     showInviteAssistant.value = false
@@ -441,6 +415,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
         coordinatorPrompt: payload.persona?.trim() || null,
         memberAssistantIds: [...new Set((payload.groupParticipantAssistantIds || []).filter(Boolean))],
         collaborationMode: payload.groupCollaborationMode || 'auto',
+        workspacePath: payload.workspacePath?.trim() || null,
       }) as { id: string }
       await refreshBootstrap()
       activeSurface.value = 'main'
@@ -454,6 +429,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
       description: payload.capabilities?.trim() || null,
       systemPrompt: payload.persona?.trim() || null,
       skillIds: payload.skills || [],
+      workspacePath: payload.workspacePath?.trim() || null,
     }) as { id: string }
     await refreshBootstrap()
     activeSurface.value = 'main'
@@ -484,6 +460,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
         coordinatorPrompt: payload.persona?.trim() || null,
         memberAssistantIds: normalizedGroupParticipants,
         collaborationMode: payload.groupCollaborationMode || currentAssistant.groupCollaborationMode || 'auto',
+        workspacePath: payload.workspacePath?.trim() || null,
       })
     }
     else {
@@ -493,6 +470,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
         description: payload.capabilities?.trim() || null,
         systemPrompt: payload.persona?.trim() || null,
         skillIds: payload.skills?.length ? [...payload.skills] : [],
+        workspacePath: payload.workspacePath?.trim() || null,
       })
     }
 
@@ -501,17 +479,16 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     return assistantId
   }
 
-  async function createSession(payload: CreateSessionPayload) {
-    const targetAssistant = newSessionAssistant.value
+  async function createSessionForAssistant(assistantId: string) {
+    const targetAssistant = findAssistantById(assistantId)
     if (!targetAssistant)
       return null
-    
-    const workspacePath = targetAssistant.workspacePath?.trim() || payload.workspacePath.trim() || '~/Documents'
+
+    const workspacePath = targetAssistant.workspacePath?.trim() || '~/Documents'
     const isGroupSession = !!targetAssistant.groupParticipantAssistantIds?.length || !!targetAssistant.groupCollaborationMode
-    const customTitle = payload.sessionTitle?.trim()
-    const title = customTitle || (isGroupSession
+    const title = isGroupSession
       ? `${targetAssistant.name} 协作会话`
-      : `${targetAssistant.name} 新会话`)
+      : `${targetAssistant.name} 新会话`
 
     const result = await provider.createSession!({
       assistantId: isGroupSession ? '' : targetAssistant.id,
@@ -537,7 +514,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     activeSurface.value = 'main'
     activeSessionId.value = createdDetail.id
     workspaceOpen.value = false
-    closeNewSession()
     return createdDetail.id
   }
 
@@ -584,8 +560,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     else
       await getOpencodeDesktopApi().deleteAssistant(assistantId)
     invitedAssistants.value = invitedAssistants.value.filter(id => id !== assistantId)
-    if (newSessionAssistantId.value === assistantId)
-      closeNewSession()
     if (editingAssistantId.value === assistantId)
       closeNewAssistant()
     sessionMap.value = Object.fromEntries(
@@ -662,6 +636,23 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     }
   }
 
+  async function abortSession() {
+    if (!activeSessionId.value || !provider.abortSession)
+      return null
+
+    const sessionId = activeSessionId.value
+
+    try {
+      await provider.abortSession(sessionId)
+      return sessionMap.value[sessionId] || null
+    }
+    finally {
+      isAiTyping.value = false
+      pendingMutation.value = null
+      void loadSessionDetail(sessionId, { force: true, includeWorkspace: false })
+    }
+  }
+
   async function submitChoiceForm(payload: Omit<AIStudioChoiceSubmissionPayload, 'sessionId'>) {
     if (!activeSessionId.value)
       return null
@@ -712,7 +703,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
   }
 
   function extractRuntimeEventSessionId(event: { type: string; properties: Record<string, unknown> }) {
-    if (event.type === 'session.idle' || event.type === 'session.status' || event.type === 'session.compacted') {
+    if (event.type === 'session.idle' || event.type === 'session.status' || event.type === 'session.compacted' || event.type === 'session.error') {
       return event.properties.sessionID as string | undefined
     }
 
@@ -802,6 +793,12 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
         const status = event.properties.status as { type: string } | undefined
         if (status?.type === 'busy') isAiTyping.value = true
       }
+      else if (event.type === 'session.error') {
+        isAiTyping.value = false
+        const runtimeError = event.properties.error as { data?: { message?: string } } | undefined
+        errorMessage.value = runtimeError?.data?.message || 'AI Studio 运行失败'
+        scheduleRuntimeSessionRefresh(eventSessionId, true)
+      }
       else if (event.type === 'session.idle') {
         isAiTyping.value = false
         scheduleRuntimeSessionRefresh(eventSessionId, true)
@@ -828,11 +825,10 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     assistantModalMode,
     assistantTemplateKind,
     assistantGroups,
+    abortSession,
     closeInviteAssistant,
     closeNewAssistant,
-    closeNewSession,
     createAssistant,
-    createSession,
     deleteAssistant,
     deleteSession,
     editingAssistant,
@@ -846,14 +842,11 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     isAiTyping,
     isCardPending,
     loading,
-    newSessionAssistant,
     newSessionParticipantCandidates,
-    newSessionAssistantId,
     openInviteAssistant,
     openEditAssistant,
     openNewAssistant,
     openNewGroupTemplate,
-    openNewSession,
     openSurface,
     pendingMutation,
     renameSession,
@@ -864,12 +857,12 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     setWorkspaceOpen,
     showInviteAssistant,
     showNewAssistant,
-    showNewSession,
     submitCardAction,
     submitChoiceForm,
     submitParamForm,
     toggleWorkspace,
     updateAssistant,
+    createSessionForAssistant,
     workspaceOpen,
   }
 })

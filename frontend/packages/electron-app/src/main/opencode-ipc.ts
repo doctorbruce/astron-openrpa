@@ -1,9 +1,10 @@
 import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { ipcMain, BrowserWindow, app } from 'electron'
+import { ipcMain, BrowserWindow, app, dialog } from 'electron'
 
 import {
   IPC_OPENCODE_AWAIT_INITIALIZATION,
+  IPC_OPENCODE_ABORT_SESSION,
   IPC_OPENCODE_CREATE_SESSION,
   IPC_OPENCODE_DELETE_ASSISTANT,
   IPC_OPENCODE_DELETE_GROUP_ROOM,
@@ -16,6 +17,7 @@ import {
   IPC_OPENCODE_LIST_ASSISTANTS,
   IPC_OPENCODE_LIST_GROUP_ROOMS,
   IPC_OPENCODE_LIST_SKILLS,
+  IPC_OPENCODE_PICK_WORKSPACE,
   IPC_OPENCODE_IMPORT_SKILL,
   IPC_OPENCODE_RENAME_SESSION,
   IPC_OPENCODE_RUNTIME_EVENT,
@@ -39,7 +41,7 @@ import {
 } from './opencode/adapter'
 import { createLogger } from './opencode/logging'
 import { scanWorkspaceArtifacts } from './opencode/workspace-scan'
-import { resolveSessionMessageContext, resolveSessionWorkspaceContext } from './opencode/workspace-context'
+import { appendPromptSection, resolveSessionMessageContext, resolveSessionWorkspaceContext } from './opencode/workspace-context'
 import type { DesktopRuntimeEvent } from '../shared/sessions'
 import type {
   AssistantRecord,
@@ -63,6 +65,47 @@ const logger = createLogger('ipc')
 
 export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
   const { sidecar, api, eventStream, skillsService, assistantStore, settingsStore, sessionStore } = deps
+  let runtimeConfigDirty = false
+  const markRuntimeConfigDirty = (reason: string) => {
+    runtimeConfigDirty = true
+    logger.info('runtime config marked dirty', {
+      reason,
+      runtimePhase: sidecar.getStatus().phase,
+    })
+  }
+  const ensureFreshRuntimeConfig = async () => {
+    if (!runtimeConfigDirty) {
+      logger.info('runtime config already fresh before send')
+      return
+    }
+
+    const runtimeStatus = sidecar.getStatus()
+    if (runtimeStatus.phase !== 'ready') {
+      logger.info('runtime config dirty but sidecar is not ready; next startup will use latest config', {
+        runtimePhase: runtimeStatus.phase,
+      })
+      runtimeConfigDirty = false
+      return
+    }
+
+    const statuses = await api.getSessionStatuses().catch(() => ({}))
+    const busySessionIds = Object.entries(statuses)
+      .filter(([, status]) => status?.type === 'busy')
+      .map(([sessionId]) => sessionId)
+
+    logger.info('ensuring fresh runtime config before send', {
+      runtimePhase: runtimeStatus.phase,
+      busySessionIds,
+    })
+
+    if (busySessionIds.length > 0) {
+      throw new Error('助手配置刚刚变更，请先停止或等待当前运行中的会话，再继续发起新对话。')
+    }
+
+    await sidecar.restart()
+    runtimeConfigDirty = false
+    logger.info('restarted sidecar to apply updated opencode config')
+  }
 
   eventStream.subscribe((event: DesktopRuntimeEvent) => {
     sessionStore.applyEvent(event)
@@ -78,12 +121,13 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
   })
 
   ipcMain.handle(IPC_OPENCODE_GET_BOOTSTRAP, async () => {
-    const [assistants, groupRooms, sessions, assistantSessions, groupRoomSessions] = await Promise.all([
+    const [assistants, groupRooms, sessions, assistantSessions, groupRoomSessions, skillsState] = await Promise.all([
       assistantStore.listAssistants(),
       assistantStore.listGroupRooms(),
       api.listSessions().catch(() => []),
       assistantStore.listAssistantSessions(),
       assistantStore.listGroupRoomSessions(),
+      skillsService.getState(),
     ])
 
     const rootSessions = sessions.filter((s) => !s.parentID && !s.time.archived)
@@ -123,6 +167,7 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       sessionsByAssistantId,
       sessionsByGroupRoomId,
       unassignedSessions,
+      skillsState.skills,
     )
 
     logger.info('bootstrap assembled sidebar groups', {
@@ -188,9 +233,10 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       groupRoomSessions,
     )
     const runtimeDirectory = workspaceContext.workspacePath?.trim() || null
-    const [session, messages] = await Promise.all([
+    const [session, messages, statuses] = await Promise.all([
       api.getSession(sessionId, runtimeDirectory),
       api.getSessionMessages(sessionId, runtimeDirectory),
+      api.getSessionStatuses().catch(() => ({})),
     ])
     const sessionBinding = resolveSessionBinding(
       sessionId,
@@ -207,7 +253,7 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
     return toStudioSessionDetail({
       ...session,
       title: sessionBinding.title || session.title,
-    }, messages, sessionBinding.assistantName, sessionBinding.assistantBadge, {
+    }, messages, statuses[sessionId], sessionBinding.assistantName, sessionBinding.assistantBadge, {
       workspacePath,
       workspaceFiles: workspaceSnapshot.workspaceFiles,
       artifacts: workspaceSnapshot.artifacts,
@@ -262,6 +308,24 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
     return { success: true }
   })
 
+  ipcMain.handle(IPC_OPENCODE_ABORT_SESSION, async (_event, sessionId: string) => {
+    const [assistants, groupRooms, assistantSessions, groupRoomSessions] = await Promise.all([
+      assistantStore.listAssistants(),
+      assistantStore.listGroupRooms(),
+      assistantStore.listAssistantSessions(),
+      assistantStore.listGroupRoomSessions(),
+    ])
+    const workspaceContext = resolveSessionWorkspaceContext(
+      sessionId,
+      assistants,
+      groupRooms,
+      assistantSessions,
+      groupRoomSessions,
+    )
+    await api.abortSession(sessionId, workspaceContext.workspacePath?.trim() || null)
+    return { success: true }
+  })
+
   ipcMain.handle(
     IPC_OPENCODE_SEND_MESSAGE,
     async (
@@ -275,10 +339,18 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
           mime: string
           url: string
         }>
+        system?: string | null
         model?: string | null
         providerId?: string | null
       },
     ) => {
+      logger.info('ipc send message requested', {
+        sessionID: payload.sessionID,
+        runtimeConfigDirty,
+        textPreview: payload.text.slice(0, 120),
+        attachmentCount: payload.attachments?.length || 0,
+      })
+      await ensureFreshRuntimeConfig()
       const [assistants, groupRooms, assistantSessions, groupRoomSessions] = await Promise.all([
         assistantStore.listAssistants(),
         assistantStore.listGroupRooms(),
@@ -299,6 +371,13 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
         assistantSessions,
         groupRoomSessions,
       )
+      logger.info('resolved session message context', {
+        sessionID: payload.sessionID,
+        agent: context.agent ?? null,
+        hasSystemPrompt: Boolean(context.system?.trim()),
+        hasPayloadSystemPrompt: Boolean(payload.system?.trim()),
+        workspacePath: workspaceContext.workspacePath?.trim() || null,
+      })
       await api.sendMessage({
         sessionID: payload.sessionID,
         text: payload.text,
@@ -307,7 +386,7 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
         model: payload.model ?? null,
         providerId: payload.providerId ?? null,
         agent: context.agent ?? null,
-        system: context.system ?? null,
+        system: appendPromptSection(payload.system ?? null, context.system ?? null) ?? null,
       })
       return { success: true }
     },
@@ -334,11 +413,21 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
   })
 
   ipcMain.handle(IPC_OPENCODE_SAVE_ASSISTANT, async (_event, input: Parameters<AssistantStore['saveAssistant']>[0]) => {
-    return assistantStore.saveAssistant(input)
+    logger.info('saving assistant', {
+      id: input.id,
+      name: input.name,
+      skillIds: input.skillIds,
+    })
+    const result = await assistantStore.saveAssistant(input)
+    markRuntimeConfigDirty(`saveAssistant:${input.id}`)
+    return result
   })
 
   ipcMain.handle(IPC_OPENCODE_DELETE_ASSISTANT, async (_event, id: string) => {
-    return assistantStore.deleteAssistant(id)
+    logger.info('deleting assistant', { id })
+    const result = await assistantStore.deleteAssistant(id)
+    markRuntimeConfigDirty(`deleteAssistant:${id}`)
+    return result
   })
 
   ipcMain.handle(IPC_OPENCODE_LIST_GROUP_ROOMS, async () => {
@@ -346,23 +435,55 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
   })
 
   ipcMain.handle(IPC_OPENCODE_SAVE_GROUP_ROOM, async (_event, input: Parameters<AssistantStore['saveGroupRoom']>[0]) => {
-    return assistantStore.saveGroupRoom(input)
+    logger.info('saving group room', {
+      id: input.id,
+      name: input.name,
+      memberAssistantIds: input.memberAssistantIds,
+    })
+    const result = await assistantStore.saveGroupRoom(input)
+    markRuntimeConfigDirty(`saveGroupRoom:${input.id}`)
+    return result
   })
 
   ipcMain.handle(IPC_OPENCODE_DELETE_GROUP_ROOM, async (_event, id: string) => {
-    return assistantStore.deleteGroupRoom(id)
+    logger.info('deleting group room', { id })
+    const result = await assistantStore.deleteGroupRoom(id)
+    markRuntimeConfigDirty(`deleteGroupRoom:${id}`)
+    return result
   })
 
   ipcMain.handle(IPC_OPENCODE_LIST_SKILLS, async () => {
     return skillsService.getState()
   })
 
+  ipcMain.handle(IPC_OPENCODE_PICK_WORKSPACE, async (_event, currentPath?: string | null) => {
+    const selection = await dialog.showOpenDialog({
+      title: '选择工作空间',
+      buttonLabel: '选择文件夹',
+      defaultPath: typeof currentPath === 'string' && currentPath.trim() ? currentPath.trim() : undefined,
+      properties: ['openDirectory', 'createDirectory'],
+    })
+
+    if (selection.canceled || selection.filePaths.length === 0) {
+      return { canceled: true, path: null }
+    }
+
+    return {
+      canceled: false,
+      path: selection.filePaths[0] ?? null,
+    }
+  })
+
   ipcMain.handle(IPC_OPENCODE_IMPORT_SKILL, async () => {
-    return skillsService.importSkillFromDialog()
+    const result = await skillsService.importSkillFromDialog()
+    markRuntimeConfigDirty(`importSkill:${result.skillId}`)
+    return result
   })
 
   ipcMain.handle(IPC_OPENCODE_DELETE_SKILL, async (_event, skillId: string) => {
-    return skillsService.deleteSkill(skillId)
+    const result = await skillsService.deleteSkill(skillId)
+    markRuntimeConfigDirty(`deleteSkill:${skillId}`)
+    return result
   })
 
   return {
@@ -374,6 +495,7 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       ipcMain.removeHandler(IPC_OPENCODE_CREATE_SESSION)
       ipcMain.removeHandler(IPC_OPENCODE_RENAME_SESSION)
       ipcMain.removeHandler(IPC_OPENCODE_DELETE_SESSION)
+      ipcMain.removeHandler(IPC_OPENCODE_ABORT_SESSION)
       ipcMain.removeHandler(IPC_OPENCODE_SEND_MESSAGE)
       ipcMain.removeHandler(IPC_OPENCODE_GET_SETTINGS)
       ipcMain.removeHandler(IPC_OPENCODE_SAVE_PROVIDER)
@@ -385,6 +507,7 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       ipcMain.removeHandler(IPC_OPENCODE_SAVE_GROUP_ROOM)
       ipcMain.removeHandler(IPC_OPENCODE_DELETE_GROUP_ROOM)
       ipcMain.removeHandler(IPC_OPENCODE_LIST_SKILLS)
+      ipcMain.removeHandler(IPC_OPENCODE_PICK_WORKSPACE)
       ipcMain.removeHandler(IPC_OPENCODE_IMPORT_SKILL)
       ipcMain.removeHandler(IPC_OPENCODE_DELETE_SKILL)
     },

@@ -87,6 +87,7 @@ export interface AIStudioProvider {
   getBootstrap: () => Promise<AIStudioBootstrap>
   getSessionDetail: (sessionId: string, options?: { includeWorkspace?: boolean }) => Promise<StudioSessionDetail>
   sendMessage: (payload: AIStudioSendMessagePayload) => Promise<void>
+  abortSession?: (sessionId: string) => Promise<void>
   submitChoiceForm: (payload: AIStudioChoiceSubmissionPayload) => Promise<AIStudioSessionMutationResult>
   submitParamForm: (payload: AIStudioParamSubmissionPayload) => Promise<AIStudioSessionMutationResult>
   submitCardAction: (payload: AIStudioCardActionPayload) => Promise<AIStudioSessionMutationResult>

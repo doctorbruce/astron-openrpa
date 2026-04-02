@@ -20,6 +20,7 @@ export type OpencodeDesktopApi = {
   sendMessage: (payload: {
     sessionID: string
     text: string
+    system?: string | null
     attachments?: Array<{
       id: string
       name: string
@@ -29,6 +30,7 @@ export type OpencodeDesktopApi = {
     model?: string | null
     providerId?: string | null
   }) => Promise<{ success: boolean }>
+  abortSession: (sessionId: string) => Promise<{ success: boolean }>
   listAssistants: () => Promise<unknown[]>
   saveAssistant: (input: unknown) => Promise<unknown>
   deleteAssistant: (id: string) => Promise<unknown>
@@ -106,9 +108,15 @@ export const opencodeAIStudioProvider: AIStudioProvider = {
     const skillReminder = buildSkillReminder(payload.skills)
     await api.sendMessage({
       sessionID: payload.sessionId,
-      text: `${skillReminder}${payload.content}`.trim(),
+      text: payload.content.trim(),
+      system: skillReminder || undefined,
       attachments: payload.attachments?.map(toDesktopAttachment),
     })
+  },
+
+  abortSession: async (sessionId: string): Promise<void> => {
+    const api = getOpencodeDesktopApi()
+    await api.abortSession(sessionId)
   },
 
   createSession: async (payload: AIStudioCreateSessionPayload): Promise<AIStudioSessionMutationResult> => {

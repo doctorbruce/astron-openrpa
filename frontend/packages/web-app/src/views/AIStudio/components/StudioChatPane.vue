@@ -42,6 +42,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'open-invite'): void
+  (e: 'abort-session'): void
   (e: 'send-message', payload: { content: string, attachments: StudioMessageAttachment[], mentions?: string[], skills?: string[] }): void
   (e: 'submit-choice', payload: { cardId: string, optionId: string }): void
   (e: 'submit-param', payload: { cardId: string, values: Record<string, string> }): void
@@ -161,6 +162,7 @@ const skillOptions = computed(() => props.availableSkills || [])
 const mentionOptions = computed(() => props.mentionOptions || [])
 const displayedAttachments = computed(() => localAttachments.value)
 const canSend = computed(() => draft.value.trim().length > 0 || displayedAttachments.value.length > 0)
+const canAbort = computed(() => props.sessionPending || !!props.isAiTyping)
 const composerInteractive = computed(() =>
   isComposerFocused.value
   || !!activeTrigger.value
@@ -816,8 +818,13 @@ function sendMessage() {
   }
   const mentions = selectedMentionOptions.value.map(option => option.id)
   const skills = selectedSkillOptions.value.map(option => option.id)
+  const content = stripSkillTokensFromDraft(draft.value, selectedSkillOptions.value).trim()
+  if (!content && displayedAttachments.value.length === 0) {
+    message.info('请输入消息内容')
+    return
+  }
   emit('send-message', {
-    content: draft.value.trim(),
+    content,
     attachments: [...displayedAttachments.value],
     mentions,
     skills,
@@ -852,6 +859,21 @@ function sendSuggestedPrompt(content: string) {
   nextTick(() => {
     resizeTextarea()
   })
+}
+
+function stripSkillTokensFromDraft(
+  content: string,
+  options: Array<{ label: string }>,
+) {
+  let next = content
+  for (const option of options) {
+    const token = `/${option.label}`
+    next = next.replace(new RegExp(`(^|[\\s\\n])${escapeRegExp(token)}(?=$|[\\s\\n])`, 'g'), '$1')
+  }
+  return next
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
 }
 
 function onDraftKeydown(event: KeyboardEvent) {
@@ -1374,6 +1396,17 @@ function onDraftKeydown(event: KeyboardEvent) {
 
             <Button variant="ghost" size="icon" class="h-8 w-8 rounded-full border-0 bg-[rgba(255,255,255,0.72)] text-black/56 shadow-none hover:bg-[rgba(255,255,255,0.96)] hover:text-[#726FFF] hover:translate-y-0" @click="void addAttachment()">
               <Paperclip class="h-3.5 w-3.5" />
+            </Button>
+
+            <Button
+              v-if="canAbort"
+              data-testid="composer-abort-button"
+              variant="outline"
+              size="icon"
+              class="h-8 w-8 rounded-[10px] border border-[rgba(239,68,68,0.18)] bg-white/84 text-[#D14343] shadow-none hover:border-[rgba(239,68,68,0.26)] hover:bg-[rgba(254,242,242,0.95)] hover:text-[#B42318]"
+              @click="emit('abort-session')"
+            >
+              <X class="h-3.5 w-3.5" />
             </Button>
 
             <Button
