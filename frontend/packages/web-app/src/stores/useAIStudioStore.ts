@@ -115,11 +115,13 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
 
   const newSessionParticipantCandidates = computed(() => {
     const singleGroup = assistantGroups.value.find(group => group.id === 'single')
-    return (singleGroup?.assistants || []).map(assistant => ({
-      id: assistant.id,
-      name: assistant.name,
-      badge: assistant.badge,
-    }))
+    return (singleGroup?.assistants || [])
+      .filter(assistant => !assistant.isBuiltin)
+      .map(assistant => ({
+        id: assistant.id,
+        name: assistant.name,
+        badge: assistant.badge,
+      }))
   })
 
   const isActiveSessionPending = computed(() => pendingMutation.value?.sessionId === activeSessionId.value)
