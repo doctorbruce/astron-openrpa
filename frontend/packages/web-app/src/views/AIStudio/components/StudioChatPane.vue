@@ -755,7 +755,13 @@ function cardAssistantId(card: StudioChatCard) {
   return card.assistantId || 'finance'
 }
 
+function cardAssistantRole(card: StudioChatCard) {
+  return card.assistantRole || 'coordinator'
+}
+
 function cardMetaTone(card: StudioChatCard) {
+  if (cardAssistantRole(card) === 'participant')
+    return 'bg-[#ECFDF5] text-[#047857]'
   if (cardAssistantId(card) === 'code')
     return 'bg-[#F3F4F6] text-black/60'
   if (cardAssistantId(card) === 'office')
@@ -764,6 +770,8 @@ function cardMetaTone(card: StudioChatCard) {
 }
 
 function cardNameTone(card: StudioChatCard) {
+  if (cardAssistantRole(card) === 'participant')
+    return 'text-[#047857]'
   if (cardAssistantId(card) === 'code')
     return 'text-black/68'
   if (cardAssistantId(card) === 'office')

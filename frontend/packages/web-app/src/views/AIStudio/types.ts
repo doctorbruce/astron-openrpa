@@ -253,6 +253,7 @@ interface StudioChatCardBase {
   assistantId?: string
   assistantName?: string
   assistantBadge?: string
+  assistantRole?: 'coordinator' | 'participant'
   time?: string
   order?: number
 }
@@ -446,6 +447,7 @@ export interface StudioSessionDetail {
   assistantName: string
   run?: StudioSessionRun
   participantAssistantIds?: string[]
+  childSessionIds?: string[]
   coordinatorAssistantId?: string
   coordinatorPersonaPreset?: 'general' | 'pace' | 'risk' | 'outcome'
   collaborationMode?: StudioCollaborationMode

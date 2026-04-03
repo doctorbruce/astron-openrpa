@@ -29,6 +29,7 @@ import {
   IPC_OPENCODE_SAVE_GROUP_ROOM,
   IPC_OPENCODE_SAVE_MCP_SERVER,
   IPC_OPENCODE_SAVE_PROVIDER,
+  IPC_OPENCODE_SAVE_SKILL_METADATA,
   IPC_OPENCODE_CLEAR_SESSION_MODEL_OVERRIDE,
   IPC_OPENCODE_DELETE_MCP_SERVER,
   IPC_OPENCODE_CONNECT_MCP_SERVER,
@@ -134,6 +135,27 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
     await sidecar.restart()
     runtimeConfigDirty = false
     logger.info('restarted sidecar to apply updated opencode config', { reason })
+  }
+  const setMcpServerEnabled = async (name: string, enabled: boolean) => {
+    const normalizedName = name.trim()
+    if (!normalizedName) {
+      throw new Error('MCP 服务名称不能为空。')
+    }
+
+    const storedSettings = await settingsStore.getStoredSettings()
+    const existingConfig = storedSettings.mcp[normalizedName]
+    if (!existingConfig) {
+      throw new Error(`MCP 服务 ${normalizedName} 不存在。`)
+    }
+
+    await settingsStore.saveMcpServer({
+      name: normalizedName,
+      config: {
+        ...existingConfig,
+        enabled,
+      },
+    })
+    await applyRuntimeConfigChange(`${enabled ? 'enable' : 'disable'}McpServer:${normalizedName}`)
   }
   eventStream.subscribe((event: DesktopRuntimeEvent) => {
     sessionStore.applyEvent(event)
@@ -273,6 +295,18 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       assistantSessions,
       groupRoomSessions,
     )
+    const childSessions = sessionBinding.mode === 'group'
+      ? await api.listSessionChildren(sessionId, runtimeDirectory).catch(() => [])
+      : []
+    const childSessionDetails = childSessions.length > 0
+      ? await Promise.all(
+        childSessions.map(async (childSession) => ({
+          session: childSession,
+          messages: await api.getSessionMessages(childSession.id, runtimeDirectory).catch(() => []),
+          status: statuses[childSession.id],
+        })),
+      )
+      : []
     const workspacePath = workspaceContext.workspacePath?.trim() || session.directory
     const workspaceSnapshot = includeWorkspace && workspacePath
       ? await scanWorkspaceArtifacts(workspacePath)
@@ -290,7 +324,7 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       workspacePath,
       workspaceFiles: workspaceSnapshot.workspaceFiles,
       artifacts: workspaceSnapshot.artifacts,
-    })
+    }, childSessionDetails)
     },
   )
 
@@ -556,12 +590,13 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
   })
 
   ipcMain.handle(IPC_OPENCODE_CONNECT_MCP_SERVER, async (_event, name: string) => {
+    await setMcpServerEnabled(name, true)
     await api.connectMcpServer(name)
     return { success: true }
   })
 
   ipcMain.handle(IPC_OPENCODE_DISCONNECT_MCP_SERVER, async (_event, name: string) => {
-    await api.disconnectMcpServer(name)
+    await setMcpServerEnabled(name, false)
     return { success: true }
   })
 
@@ -610,7 +645,7 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
   })
 
   ipcMain.handle(IPC_OPENCODE_LIST_SKILLS, async () => {
-    return skillsService.getState()
+    return getDecoratedSkillsState()
   })
 
   ipcMain.handle(IPC_OPENCODE_PICK_WORKSPACE, async (_event, currentPath?: string | null) => {
@@ -633,12 +668,20 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
 
   ipcMain.handle(IPC_OPENCODE_IMPORT_SKILL, async () => {
     const result = await skillsService.importSkillFromDialog()
-    markRuntimeConfigDirty(`importSkill:${result.skillId}`)
+    if (!result.cancelled) {
+      markRuntimeConfigDirty(`importSkill:${result.skillId}`)
+    }
+    return result
+  })
+
+  ipcMain.handle(IPC_OPENCODE_SAVE_SKILL_METADATA, async (_event, input: { skillId: string; tags: string[] }) => {
+    const result = await settingsStore.saveSkillMetadata(input)
     return result
   })
 
   ipcMain.handle(IPC_OPENCODE_DELETE_SKILL, async (_event, skillId: string) => {
     const result = await skillsService.deleteSkill(skillId)
+    await settingsStore.deleteSkillMetadata(skillId)
     markRuntimeConfigDirty(`deleteSkill:${skillId}`)
     return result
   })
@@ -674,8 +717,24 @@ export function registerOpencodeIpc(deps: OpencodeIpcDeps) {
       ipcMain.removeHandler(IPC_OPENCODE_LIST_SKILLS)
       ipcMain.removeHandler(IPC_OPENCODE_PICK_WORKSPACE)
       ipcMain.removeHandler(IPC_OPENCODE_IMPORT_SKILL)
+      ipcMain.removeHandler(IPC_OPENCODE_SAVE_SKILL_METADATA)
       ipcMain.removeHandler(IPC_OPENCODE_DELETE_SKILL)
     },
+  }
+
+  async function getDecoratedSkillsState() {
+    const [skillState, storedSettings] = await Promise.all([
+      skillsService.getState(),
+      settingsStore.getStoredSettings(),
+    ])
+
+    return {
+      ...skillState,
+      skills: skillState.skills.map(skill => ({
+        ...skill,
+        tags: storedSettings.skillMetadata[skill.id]?.tags ?? [],
+      })),
+    }
   }
 }
 

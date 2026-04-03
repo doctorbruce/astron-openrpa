@@ -69,6 +69,7 @@ const specialCardShellClass = 'overflow-hidden rounded-[22px] border-0 bg-[rgba(
 const specialCardHeaderClass = 'flex items-center gap-2 px-4 py-3.5'
 const specialCardDividerClass = 'mx-4 h-px bg-[linear-gradient(90deg,rgba(226,231,240,0)_0%,rgba(226,231,240,0.82)_16%,rgba(226,231,240,0.82)_84%,rgba(226,231,240,0)_100%)]'
 const toolCallExpansion = reactive<Record<string, boolean>>({})
+const isParticipantCard = computed(() => props.card.assistantRole === 'participant')
 
 const widthClass = computed(() => {
   switch (props.card.type) {
@@ -398,6 +399,33 @@ function cardTestId(type: StudioChatCard['type']) {
   }
 }
 
+function toolCallShellClass() {
+  if (isParticipantCard.value)
+    return 'overflow-hidden rounded-[18px] bg-[linear-gradient(180deg,rgba(236,253,245,0.7)_0%,rgba(255,255,255,0.88)_100%)] px-1.5 shadow-[0_10px_22px_rgba(16,185,129,0.05)] ring-1 ring-[rgba(16,185,129,0.12)] backdrop-blur-[4px]'
+  return 'overflow-hidden rounded-[18px] bg-[rgba(255,255,255,0.18)] px-1.5 backdrop-blur-[4px]'
+}
+
+function toolCallIconTone(status: StudioToolStatus) {
+  if (status === 'running')
+    return isParticipantCard.value ? 'text-[#059669]' : 'text-[#726FFF]'
+  if (status === 'done')
+    return isParticipantCard.value ? 'text-[#10B981]' : 'text-[#9CA3AF]'
+  if (status === 'failed')
+    return 'text-[#DC2626]'
+  return isParticipantCard.value ? 'text-[#047857]/38' : 'text-black/26'
+}
+
+function textBubbleClass() {
+  if (isParticipantCard.value) {
+    return 'rounded-t-[18px] rounded-br-[18px] rounded-bl-[6px] bg-[linear-gradient(180deg,rgba(236,253,245,0.92)_0%,rgba(255,255,255,0.92)_100%)] px-4 py-3 shadow-[0_8px_18px_rgba(16,185,129,0.05)] ring-1 ring-[rgba(16,185,129,0.12)]'
+  }
+  return 'rounded-t-[18px] rounded-br-[18px] rounded-bl-[6px] bg-[rgba(255,255,255,0.64)] px-4 py-3 shadow-[0_6px_14px_rgba(15,23,42,0.04)]'
+}
+
+function streamingTextTone() {
+  return isParticipantCard.value ? 'whitespace-pre-wrap break-words text-[13px] leading-6 text-[#065F46]' : 'whitespace-pre-wrap break-words text-[13px] leading-6 text-black/78'
+}
+
 function resolveArtifactPreview(card: Extract<StudioChatCard, { type: 'artifact-preview' }>): StudioArtifactPreviewPayload {
   if (card.preview)
     return card.preview
@@ -519,33 +547,35 @@ function resolveArtifactPreview(card: Extract<StudioChatCard, { type: 'artifact-
     <template v-else-if="card.type === 'tool-call-list'">
       <div :data-testid="cardTestId(card.type)" class="space-y-2 px-1 py-1">
         <div class="flex items-center gap-2 px-1">
-          <Sparkles class="h-3.5 w-3.5 text-black/22" />
-          <span data-testid="special-card-title" class="text-[11px] font-medium leading-4 text-black/44">{{ card.title || '工具执行' }}</span>
-          <span class="text-[10px] leading-4 text-black/26">{{ card.calls.length }} 步</span>
+          <Sparkles class="h-3.5 w-3.5" :class="isParticipantCard ? 'text-[#10B981]' : 'text-black/22'" />
+          <span data-testid="special-card-title" class="text-[11px] font-medium leading-4" :class="isParticipantCard ? 'text-[#047857]' : 'text-black/44'">{{ card.title || '工具执行' }}</span>
+          <span class="text-[10px] leading-4" :class="isParticipantCard ? 'text-[#047857]/55' : 'text-black/26'">{{ card.calls.length }} 步</span>
         </div>
-        <div class="overflow-hidden rounded-[18px] bg-[rgba(255,255,255,0.18)] px-1.5 backdrop-blur-[4px]">
+        <div :class="toolCallShellClass()">
           <div
             v-for="(call, index) in card.calls"
             :key="`${card.id}-${call.name}-${call.arg}`"
-            class="border-b border-[rgba(15,23,42,0.05)] last:border-b-0"
+            class="border-b last:border-b-0"
+            :class="isParticipantCard ? 'border-[rgba(16,185,129,0.10)]' : 'border-[rgba(15,23,42,0.05)]'"
           >
             <button
               :data-testid="`tool-call-toggle-${card.id}-${index}`"
               type="button"
-              class="flex w-full items-center gap-2.5 px-2.5 py-2.5 text-left transition-colors hover:bg-white/30"
+              class="flex w-full items-center gap-2.5 px-2.5 py-2.5 text-left transition-colors"
+              :class="isParticipantCard ? 'hover:bg-[rgba(255,255,255,0.48)]' : 'hover:bg-white/30'"
               @click="toggleToolCall(card.id, index, call.status)"
             >
-              <LoaderCircle v-if="call.status === 'running'" class="h-3.5 w-3.5 shrink-0 animate-spin text-[#726FFF]" />
-              <CheckCircle2 v-else-if="call.status === 'done'" class="h-3.5 w-3.5 shrink-0 text-[#9CA3AF]" />
-              <AlertTriangle v-else-if="call.status === 'failed'" class="h-3.5 w-3.5 shrink-0 text-[#DC2626]" />
-              <Clock3 v-else class="h-3.5 w-3.5 shrink-0 text-black/26" />
+              <LoaderCircle v-if="call.status === 'running'" class="h-3.5 w-3.5 shrink-0 animate-spin" :class="toolCallIconTone(call.status)" />
+              <CheckCircle2 v-else-if="call.status === 'done'" class="h-3.5 w-3.5 shrink-0" :class="toolCallIconTone(call.status)" />
+              <AlertTriangle v-else-if="call.status === 'failed'" class="h-3.5 w-3.5 shrink-0" :class="toolCallIconTone(call.status)" />
+              <Clock3 v-else class="h-3.5 w-3.5 shrink-0" :class="toolCallIconTone(call.status)" />
 
-              <div class="min-w-0 flex-1 truncate text-[12px] leading-5 text-black/64">
+              <div class="min-w-0 flex-1 truncate text-[12px] leading-5" :class="isParticipantCard ? 'text-[#065F46]' : 'text-black/64'">
                 <span class="font-medium">{{ toolCallHeadline(call) }}</span>
-                <span class="px-1 text-black/18">·</span>
-                <span class="font-mono text-[10px] text-black/32">{{ call.name }}</span>
-                <span v-if="call.duration" class="px-1 text-black/18">·</span>
-                <span v-if="call.duration" class="text-[10px] text-black/34">{{ call.duration }}</span>
+                <span class="px-1" :class="isParticipantCard ? 'text-[#047857]/22' : 'text-black/18'">·</span>
+                <span class="font-mono text-[10px]" :class="isParticipantCard ? 'text-[#047857]/55' : 'text-black/32'">{{ call.name }}</span>
+                <span v-if="call.duration" class="px-1" :class="isParticipantCard ? 'text-[#047857]/22' : 'text-black/18'">·</span>
+                <span v-if="call.duration" class="text-[10px]" :class="isParticipantCard ? 'text-[#047857]/55' : 'text-black/34'">{{ call.duration }}</span>
               </div>
 
               <span
@@ -563,7 +593,12 @@ function resolveArtifactPreview(card: Extract<StudioChatCard, { type: 'artifact-
               :data-testid="`tool-call-detail-${card.id}-${index}`"
               class="px-2.5 pb-2.5 pt-0.5"
             >
-              <pre class="overflow-x-auto rounded-[14px] bg-[rgba(245,247,251,0.92)] px-3 py-2.5 text-[11px] leading-5 text-black/58 shadow-[inset_0_0_0_1px_rgba(229,231,235,0.7)]"><code>{{ toolCallOutput(call) }}</code></pre>
+              <pre
+                class="overflow-x-auto rounded-[14px] px-3 py-2.5 text-[11px] leading-5"
+                :class="isParticipantCard
+                  ? 'bg-[rgba(240,253,244,0.9)] text-[#065F46] shadow-[inset_0_0_0_1px_rgba(167,243,208,0.8)]'
+                  : 'bg-[rgba(245,247,251,0.92)] text-black/58 shadow-[inset_0_0_0_1px_rgba(229,231,235,0.7)]'"
+              ><code>{{ toolCallOutput(call) }}</code></pre>
               <div v-if="false" class="space-y-1.5 text-[11px] leading-4 text-black/54">
                 <div>
                   <span class="text-black/32">调用：</span>
@@ -1051,8 +1086,8 @@ function resolveArtifactPreview(card: Extract<StudioChatCard, { type: 'artifact-
 
     <template v-else>
       <div class="flex flex-col gap-1">
-        <div class="rounded-t-[18px] rounded-br-[18px] rounded-bl-[6px] bg-[rgba(255,255,255,0.64)] px-4 py-3 shadow-[0_6px_14px_rgba(15,23,42,0.04)]">
-          <div v-if="card.streaming" class="whitespace-pre-wrap break-words text-[13px] leading-6 text-black/78">
+        <div :class="textBubbleClass()">
+          <div v-if="card.streaming" :class="streamingTextTone()">
             {{ card.content }}
           </div>
           <MarkdownMessage v-else :content="card.content" tone="assistant" />

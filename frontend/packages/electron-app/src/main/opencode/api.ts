@@ -5,6 +5,7 @@ import type { SidecarManager } from './sidecar'
 
 export type RuntimeApi = {
   listSessions: () => Promise<OpencodeSessionInfo[]>
+  listSessionChildren: (sessionID: string, directory?: string | null) => Promise<OpencodeSessionInfo[]>
   getSession: (sessionID: string, directory?: string | null) => Promise<OpencodeSessionInfo>
   getSessionMessages: (sessionID: string, directory?: string | null) => Promise<OpencodeMessageRecord[]>
   getSessionStatuses: () => Promise<Record<string, OpencodeSessionStatus>>
@@ -22,6 +23,8 @@ export type RuntimeApi = {
 export function createRuntimeApi(runtime: Pick<SidecarManager, 'getConnection'>): RuntimeApi {
   return {
     listSessions: () => requestJson<OpencodeSessionInfo[]>('/session?roots=true'),
+    listSessionChildren: (sessionID, directory) =>
+      requestJson<OpencodeSessionInfo[]>(`/session/${encodeURIComponent(sessionID)}/children`, { directory }),
     getSession: (sessionID, directory) =>
       requestJson<OpencodeSessionInfo>(`/session/${encodeURIComponent(sessionID)}`, { directory }),
     getSessionMessages: (sessionID, directory) =>

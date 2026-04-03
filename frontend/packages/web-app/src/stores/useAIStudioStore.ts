@@ -778,6 +778,17 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     return undefined
   }
 
+  function resolveRuntimeRefreshSessionId(eventSessionId: string | undefined) {
+    if (!eventSessionId || !activeSessionId.value)
+      return null
+
+    if (eventSessionId === activeSessionId.value)
+      return activeSessionId.value
+
+    const linkedChildSessionIds = sessionMap.value[activeSessionId.value]?.childSessionIds || []
+    return linkedChildSessionIds.includes(eventSessionId) ? activeSessionId.value : null
+  }
+
   async function flushRuntimeSessionRefresh(sessionId: string) {
     if (sessionId !== activeSessionId.value)
       return
@@ -839,20 +850,27 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
       if (!event?.type) return
 
       const eventSessionId = extractRuntimeEventSessionId(event)
-      if (!eventSessionId || eventSessionId !== activeSessionId.value) return
+      const refreshSessionId = resolveRuntimeRefreshSessionId(eventSessionId)
+      if (!eventSessionId || !refreshSessionId) return
+      const isDirectRootEvent = eventSessionId === activeSessionId.value
 
       if (event.type === 'session.status') {
         const status = event.properties.status as { type: string } | undefined
         if (status?.type === 'busy') isAiTyping.value = true
       }
       else if (event.type === 'message.part.delta') {
+        if (!isDirectRootEvent) {
+          scheduleRuntimeSessionRefresh(refreshSessionId)
+          return
+        }
+
         const messageId = event.properties.messageID as string | undefined
         const partId = event.properties.partID as string | undefined
         const field = event.properties.field as string | undefined
         const delta = event.properties.delta as string | undefined
 
-        if (messageId && partId && field && delta && sessionMap.value[eventSessionId]) {
-          mutateSessionDetail(eventSessionId, session =>
+        if (messageId && partId && field && delta && sessionMap.value[refreshSessionId]) {
+          mutateSessionDetail(refreshSessionId, session =>
             applyStreamingTextDelta(session, {
               messageId,
               partId,
@@ -865,9 +883,14 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
         }
       }
       else if (event.type === 'message.part.updated') {
+        if (!isDirectRootEvent) {
+          scheduleRuntimeSessionRefresh(refreshSessionId)
+          return
+        }
+
         const part = event.properties.part as { type?: string, messageID?: string, text?: string } | undefined
-        if (part?.type === 'text' && part.messageID && typeof part.text === 'string' && sessionMap.value[eventSessionId]) {
-          mutateSessionDetail(eventSessionId, session =>
+        if (part?.type === 'text' && part.messageID && typeof part.text === 'string' && sessionMap.value[refreshSessionId]) {
+          mutateSessionDetail(refreshSessionId, session =>
             applyStreamingTextPart(session, {
               messageId: part.messageID!,
               text: part.text ?? '',
@@ -877,18 +900,18 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
             isAiTyping.value = false
         }
         else {
-          scheduleRuntimeSessionRefresh(eventSessionId)
+          scheduleRuntimeSessionRefresh(refreshSessionId)
         }
       }
       else if (event.type === 'session.error') {
         isAiTyping.value = false
         const runtimeError = event.properties.error as { data?: { message?: string } } | undefined
         errorMessage.value = runtimeError?.data?.message || 'AI Studio 运行失败'
-        scheduleRuntimeSessionRefresh(eventSessionId, true)
+        scheduleRuntimeSessionRefresh(refreshSessionId, true)
       }
       else if (event.type === 'session.idle') {
         isAiTyping.value = false
-        scheduleRuntimeSessionRefresh(eventSessionId, true)
+        scheduleRuntimeSessionRefresh(refreshSessionId, true)
       }
       else if (
         event.type === 'message.updated'
@@ -897,7 +920,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
         || event.type === 'session.updated'
         || event.type === 'session.created'
       ) {
-        scheduleRuntimeSessionRefresh(eventSessionId)
+        scheduleRuntimeSessionRefresh(refreshSessionId)
       }
     })
   }

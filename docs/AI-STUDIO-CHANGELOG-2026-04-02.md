@@ -224,6 +224,35 @@
 - `frontend/packages/electron-app/src/main/opencode/config.ts`
 - `frontend/packages/electron-app/src/main/opencode/workspace-context.ts`
 
+### 12. MCP 断开持久化与群聊 child session 展示收口
+
+- MCP 配置中心里的“断开”语义改为“禁用并持久化”：
+  - 点击断开时会把对应 MCP 配置写成 `enabled: false`
+  - 点击连接时会把 `enabled: true` 写回并重新应用 runtime 配置
+  - 避免 MCP 在 sidecar 重启或会话切回后自己恢复可用
+- 群聊成员回复不再只依赖主控 `task_result` 拆泡泡：
+  - group session detail 会额外拉取 root session 的 child sessions
+  - 优先展示 child session 里的真实 assistant 文本与工具调用
+  - `task_result` 仅作为 child session 暂时没有可展示内容时的兜底
+- 群聊成员输出顺序改为更贴近原始因果顺序：
+  - 主控 message 内如果文本 part 先于 `task` 工具 part，会先显示主控文本，再显示委派出的成员内容
+  - child session 内则按自身消息顺序连续展开，不再只保留“最后一条成员文本”
+- 群聊成员消息在视觉上与主控做区分：
+  - 成员徽标、名称、文本气泡、工具卡统一切到浅青绿色系
+  - 主控继续保留原来的紫蓝中性色，方便一眼区分“协调者”和“执行成员”
+
+相关文件：
+
+- `frontend/packages/electron-app/src/main/opencode-ipc.ts`
+- `frontend/packages/electron-app/src/main/opencode-ipc.test.ts`
+- `frontend/packages/electron-app/src/main/opencode/api.ts`
+- `frontend/packages/electron-app/src/main/opencode/adapter.ts`
+- `frontend/packages/electron-app/src/main/opencode/adapter.test.ts`
+- `frontend/packages/web-app/src/stores/useAIStudioStore.ts`
+- `frontend/packages/web-app/src/views/AIStudio/types.ts`
+- `frontend/packages/web-app/src/views/AIStudio/components/StudioChatPane.vue`
+- `frontend/packages/web-app/src/views/AIStudio/components/StudioChatCardRenderer.vue`
+
 ## 当前说明
 
 - 这轮以功能打通与交互修正为主，没有系统性补跑整套测试

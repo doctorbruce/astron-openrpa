@@ -5,8 +5,10 @@ import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  IPC_OPENCODE_CONNECT_MCP_SERVER,
   IPC_OPENCODE_DELETE_ASSISTANT,
   IPC_OPENCODE_DELETE_GROUP_ROOM,
+  IPC_OPENCODE_DISCONNECT_MCP_SERVER,
   IPC_OPENCODE_GET_SESSION,
   IPC_OPENCODE_SAVE_ASSISTANT,
   IPC_OPENCODE_SAVE_DEFAULT_MODEL,
@@ -49,16 +51,41 @@ describe('registerOpencodeIpc send message workspace context', () => {
     await Promise.all(tempDirs.splice(0).map(dir => rm(dir, { recursive: true, force: true })))
   })
 
+  function createEmptyDesktopSettings() {
+    return {
+      providers: [],
+      defaultModel: {
+        providerId: null,
+        model: '',
+        configured: false,
+      },
+      mcpServers: [],
+    }
+  }
+
+  function createEmptyStoredSettings() {
+    return {
+      version: 1 as const,
+      providers: {},
+      defaultModel: null,
+      mcp: {},
+      sessionModelOverrides: {},
+      skillMetadata: {},
+    }
+  }
+
   it('routes assistant sessions through the configured agent and workspace system prompt', async () => {
     const sendMessage = vi.fn().mockResolvedValue(undefined)
 
     registerOpencodeIpc({
       sidecar: {
-        getStatus: vi.fn(),
+        getStatus: vi.fn().mockReturnValue({ phase: 'ready' }),
         awaitInitialization: vi.fn(),
       } as any,
       api: {
         sendMessage,
+        getMcpStatus: vi.fn().mockResolvedValue({}),
+        getSessionStatuses: vi.fn().mockResolvedValue({}),
       } as any,
       eventStream: {
         subscribe: vi.fn(),
@@ -95,7 +122,10 @@ describe('registerOpencodeIpc send message workspace context', () => {
         ]),
         listGroupRoomSessions: vi.fn().mockResolvedValue([]),
       } as any,
-      settingsStore: {} as any,
+      settingsStore: {
+        getSettings: vi.fn().mockResolvedValue(createEmptyDesktopSettings()),
+        getStoredSettings: vi.fn().mockResolvedValue(createEmptyStoredSettings()),
+      } as any,
       sessionStore: {
         applyEvent: vi.fn(),
       } as any,
@@ -119,7 +149,7 @@ describe('registerOpencodeIpc send message workspace context', () => {
     }))
   })
 
-  it('restarts the sidecar after assistant, group, and settings mutations', async () => {
+  it('restarts the sidecar after settings mutations and keeps assistant or group changes lazy', async () => {
     const restart = vi.fn().mockResolvedValue(undefined)
     const saveProvider = vi.fn().mockResolvedValue({ ok: true })
     const saveDefaultModel = vi.fn().mockResolvedValue({ ok: true })
@@ -131,7 +161,7 @@ describe('registerOpencodeIpc send message workspace context', () => {
     registerOpencodeIpc({
       sidecar: {
         restart,
-        getStatus: vi.fn(),
+        getStatus: vi.fn().mockReturnValue({ phase: 'ready' }),
         awaitInitialization: vi.fn(),
       } as any,
       api: {} as any,
@@ -168,7 +198,81 @@ describe('registerOpencodeIpc send message workspace context', () => {
     await saveGroupRoomHandler({}, { name: 'Review Room' })
     await deleteGroupRoomHandler({}, 'group-1')
 
-    expect(restart).toHaveBeenCalledTimes(6)
+    expect(restart).toHaveBeenCalledTimes(2)
+  })
+
+  it('persists MCP enabled state when disconnecting and reconnecting', async () => {
+    const restart = vi.fn().mockResolvedValue(undefined)
+    const connectMcpServer = vi.fn().mockResolvedValue(undefined)
+    const saveMcpServer = vi.fn().mockResolvedValue({ ok: true })
+    const getStoredSettings = vi.fn()
+      .mockResolvedValueOnce({
+        mcp: {
+          fetch: {
+            type: 'remote',
+            url: 'https://example.com/mcp',
+            enabled: true,
+          },
+        },
+      })
+      .mockResolvedValueOnce({
+        mcp: {
+          fetch: {
+            type: 'remote',
+            url: 'https://example.com/mcp',
+            enabled: false,
+          },
+        },
+      })
+
+    registerOpencodeIpc({
+      sidecar: {
+        restart,
+        getStatus: vi.fn().mockReturnValue({ phase: 'ready' }),
+        awaitInitialization: vi.fn(),
+      } as any,
+      api: {
+        connectMcpServer,
+        getSessionStatuses: vi.fn().mockResolvedValue({}),
+      } as any,
+      eventStream: {
+        subscribe: vi.fn(),
+      } as any,
+      skillsService: {} as any,
+      assistantStore: {} as any,
+      settingsStore: {
+        getStoredSettings,
+        saveMcpServer,
+      } as any,
+      sessionStore: {
+        applyEvent: vi.fn(),
+      } as any,
+    })
+
+    const disconnectHandler = ipcHandle.mock.calls.find(([channel]) => channel === IPC_OPENCODE_DISCONNECT_MCP_SERVER)?.[1]
+    const connectHandler = ipcHandle.mock.calls.find(([channel]) => channel === IPC_OPENCODE_CONNECT_MCP_SERVER)?.[1]
+
+    await disconnectHandler({}, 'fetch')
+    await connectHandler({}, 'fetch')
+
+    expect(saveMcpServer).toHaveBeenNthCalledWith(1, {
+      name: 'fetch',
+      config: {
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        enabled: false,
+      },
+    })
+    expect(saveMcpServer).toHaveBeenNthCalledWith(2, {
+      name: 'fetch',
+      config: {
+        type: 'remote',
+        url: 'https://example.com/mcp',
+        enabled: true,
+      },
+    })
+    expect(restart).toHaveBeenCalledTimes(2)
+    expect(connectMcpServer).toHaveBeenCalledWith('fetch')
   })
 
   it('loads workspace files from the assigned assistant workspace root instead of the runtime cwd', async () => {
@@ -177,7 +281,7 @@ describe('registerOpencodeIpc send message workspace context', () => {
 
     registerOpencodeIpc({
       sidecar: {
-        getStatus: vi.fn(),
+        getStatus: vi.fn().mockReturnValue({ phase: 'ready' }),
         awaitInitialization: vi.fn(),
       } as any,
       api: {
@@ -191,6 +295,7 @@ describe('registerOpencodeIpc send message workspace context', () => {
           time: { created: 1, updated: 2 },
         }),
         getSessionMessages: vi.fn().mockResolvedValue([]),
+        getSessionStatuses: vi.fn().mockResolvedValue({}),
       } as any,
       eventStream: {
         subscribe: vi.fn(),
@@ -243,7 +348,7 @@ describe('registerOpencodeIpc send message workspace context', () => {
       { id: 'workspace-file-0', name: 'summary.md', type: 'file', indent: 0 },
     ])
     expect(detail.artifacts).toEqual([
-      { id: 'workspace-artifact-0', name: 'summary.md', summary: 'Workspace file', tag: '宸ヤ綔绌洪棿鏂囦欢', tagTone: 'neutral' },
+      { id: 'workspace-artifact-0', name: 'summary.md', summary: 'Workspace file', tag: '工作区文件', tagTone: 'neutral' },
     ])
   })
 })

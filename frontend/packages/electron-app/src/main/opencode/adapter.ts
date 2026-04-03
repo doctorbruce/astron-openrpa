@@ -85,6 +85,7 @@ export type StudioChatCard =
       assistantId?: string
       assistantName?: string
       assistantBadge?: string
+      assistantRole?: 'coordinator' | 'participant'
       time?: string
       order?: number
     }
@@ -97,6 +98,7 @@ export type StudioChatCard =
       assistantId?: string
       assistantName?: string
       assistantBadge?: string
+      assistantRole?: 'coordinator' | 'participant'
       time?: string
       order?: number
     }
@@ -125,6 +127,7 @@ export type StudioSessionDetail = {
   headerBadge: string
   assistantName: string
   participantAssistantIds?: string[]
+  childSessionIds?: string[]
   collaborationMode?: 'auto' | 'pipeline' | 'race' | 'debate'
   messages: StudioMessage[]
   chatCards: StudioChatCard[]
@@ -139,6 +142,28 @@ type StudioWorkspaceSnapshot = {
   workspaceFiles?: StudioWorkspaceFile[]
   artifacts?: StudioArtifact[]
 }
+
+type StudioChildSession = {
+  session: OpencodeSessionInfo
+  messages: OpencodeMessageRecord[]
+  status?: OpencodeSessionStatus
+}
+
+type ChildSessionTextEntry = {
+  type: 'text'
+  id: string
+  content: string
+  createdAt: number
+}
+
+type ChildSessionToolEntry = {
+  type: 'tool-call-list'
+  id: string
+  calls: StudioToolCall[]
+  createdAt: number
+}
+
+type ChildSessionEntry = ChildSessionTextEntry | ChildSessionToolEntry
 
 export type AIStudioBootstrap = {
   assistantGroups: StudioAssistantGroup[]
@@ -424,6 +449,7 @@ export function toStudioSessionDetail(
     collaborationMode?: 'auto' | 'pipeline' | 'race' | 'debate'
   },
   workspaceSnapshot?: StudioWorkspaceSnapshot,
+  childSessions?: StudioChildSession[],
 ): StudioSessionDetail {
   const sessionIsBusy = sessionStatus?.type === 'busy'
   const messages: StudioMessage[] = []
@@ -436,6 +462,10 @@ export function toStudioSessionDetail(
   const sorted = messageRecords
     .slice()
     .sort((a, b) => a.info.time.created - b.info.time.created)
+  const childSessionsById = new Map(
+    (childSessions || []).map(child => [child.session.id, child]),
+  )
+  const linkedChildSessionIds = new Set<string>()
 
   for (const record of sorted) {
     const { info, parts } = record
@@ -500,7 +530,15 @@ export function toStudioSessionDetail(
         if (toolParts.length > 0 && isToolNarrationText(p.text)) return false
         return true
       })
+      const firstVisibleTextIndex = parts.findIndex((part) =>
+        part.type === 'text'
+        && !part.synthetic
+        && !part.ignored
+        && !(toolParts.length > 0 && isToolNarrationText(part.text))
+      )
+      const firstToolIndex = parts.findIndex(part => part.type === 'tool')
       const extractedTaskResults: string[] = []
+      const toolAndChildCards: StudioChatCard[] = []
 
       if (toolParts.length > 0) {
         const calls: StudioToolCall[] = toolParts.map((tp) => {
@@ -510,28 +548,31 @@ export function toStudioSessionDetail(
 
           let toolStatus: StudioToolCall['status'] = 'pending'
           let result: string | undefined
-          const staleToolResult = assistantMsg.error?.data?.message?.trim() || '执行已结束，但未收到工具完成状态。'
+          const assistantErrorMessage = assistantMsg.error?.data?.message?.trim() || assistantMsg.error?.name?.trim() || ''
 
           if (tp.state.status === 'completed') {
             toolStatus = 'done'
             result = tp.state.output
           }
           else if (tp.state.status === 'running') {
-            if (sessionIsBusy) {
-              toolStatus = 'running'
+            if (assistantErrorMessage) {
+              toolStatus = 'failed'
+              result = assistantErrorMessage
             }
             else {
-              toolStatus = 'failed'
-              result = staleToolResult
+              toolStatus = 'running'
             }
           }
           else if (tp.state.status === 'pending') {
-            if (sessionIsBusy) {
+            if (assistantErrorMessage) {
+              toolStatus = 'failed'
+              result = assistantErrorMessage
+            }
+            else if (sessionIsBusy) {
               toolStatus = 'pending'
             }
             else {
-              toolStatus = 'failed'
-              result = staleToolResult
+              toolStatus = 'running'
             }
           }
           else if (tp.state.status === 'error') {
@@ -553,19 +594,20 @@ export function toStudioSessionDetail(
           }
         })
 
-        chatCards.push({
+        toolAndChildCards.push({
           id: `${assistantMsg.id}-tools`,
           type: 'tool-call-list',
           calls,
           assistantId: resolvedAssistantId,
           assistantName: resolvedAssistantName,
           assistantBadge: resolvedAssistantBadge,
+          assistantRole: resolvedAssistantId ? 'participant' : 'coordinator',
           time: timeStr,
           order: seq++,
         })
 
         for (const [index, toolPart] of toolParts.entries()) {
-          if (toolPart.tool !== 'task' || toolPart.state.status !== 'completed')
+          if (toolPart.tool !== 'task')
             continue
 
           const subagentType = typeof toolPart.state.input?.subagent_type === 'string'
@@ -579,20 +621,67 @@ export function toStudioSessionDetail(
           if (!taskParticipantMeta)
             continue
 
-          const taskResultText = extractTaskResultText(toolPart.state.output)
+          const childSessionId = extractTaskSessionId(toolPart)
+          const childSession = childSessionId ? childSessionsById.get(childSessionId) : undefined
+          const childSessionEntries = childSession ? extractChildSessionAssistantEntries(childSession.messages, childSession.status) : []
+          const childSessionTexts = childSessionEntries.filter((entry): entry is ChildSessionTextEntry => entry.type === 'text')
+
+          if (childSessionId) {
+            linkedChildSessionIds.add(childSessionId)
+          }
+
+          const taskResultText = toolPart.state.status === 'completed'
+            ? extractTaskResultText(toolPart.state.output)
+            : null
+
+          if (childSessionEntries.length > 0) {
+            extractedTaskResults.push(...childSessionTexts.map(entry => entry.content))
+
+            for (const entry of childSessionEntries) {
+              if (entry.type === 'tool-call-list') {
+                toolAndChildCards.push({
+                  id: entry.id,
+                  type: 'tool-call-list',
+                  calls: entry.calls,
+                  assistantId: taskParticipantMeta.id,
+                  assistantName: taskParticipantMeta.name,
+                  assistantBadge: taskParticipantMeta.badge,
+                  assistantRole: 'participant',
+                  time: formatRelativeTime(entry.createdAt),
+                  order: seq++,
+                })
+                continue
+              }
+
+              toolAndChildCards.push({
+                id: entry.id,
+                type: 'text',
+                content: entry.content,
+                assistantId: taskParticipantMeta.id,
+                assistantName: taskParticipantMeta.name,
+                assistantBadge: taskParticipantMeta.badge,
+                assistantRole: 'participant',
+                time: formatRelativeTime(entry.createdAt),
+                order: seq++,
+              })
+            }
+            continue
+          }
+
           if (!taskResultText)
             continue
 
           extractedTaskResults.push(taskResultText)
 
-          chatCards.push({
+          toolAndChildCards.push({
             id: `${assistantMsg.id}-task-participant-${index}`,
             type: 'text',
             content: taskResultText,
             assistantId: taskParticipantMeta.id,
             assistantName: taskParticipantMeta.name,
             assistantBadge: taskParticipantMeta.badge,
-            time: timeStr,
+            assistantRole: 'participant',
+            time: childSession ? formatRelativeTime(resolveChildSessionTimestamp(childSession, info.time.created)) : timeStr,
             order: seq++,
           })
         }
@@ -607,7 +696,10 @@ export function toStudioSessionDetail(
           extractedTaskResults,
         )
 
-      if (combinedText && !shouldHideCoordinatorRelay) {
+      const shouldRenderCoordinatorTextFirst = firstVisibleTextIndex >= 0
+        && (firstToolIndex < 0 || firstVisibleTextIndex < firstToolIndex)
+
+      if (combinedText && !shouldHideCoordinatorRelay && shouldRenderCoordinatorTextFirst) {
         chatCards.push({
           id: assistantMsg.id,
           type: 'text',
@@ -615,6 +707,25 @@ export function toStudioSessionDetail(
           assistantId: resolvedAssistantId,
           assistantName: resolvedAssistantName,
           assistantBadge: resolvedAssistantBadge,
+          assistantRole: resolvedAssistantId ? 'participant' : 'coordinator',
+          time: timeStr,
+          order: seq++,
+        })
+      }
+
+      if (toolAndChildCards.length > 0) {
+        chatCards.push(...toolAndChildCards)
+      }
+
+      if (combinedText && !shouldHideCoordinatorRelay && !shouldRenderCoordinatorTextFirst) {
+        chatCards.push({
+          id: assistantMsg.id,
+          type: 'text',
+          content: combinedText,
+          assistantId: resolvedAssistantId,
+          assistantName: resolvedAssistantName,
+          assistantBadge: resolvedAssistantBadge,
+          assistantRole: resolvedAssistantId ? 'participant' : 'coordinator',
           time: timeStr,
           order: seq++,
         })
@@ -652,6 +763,7 @@ export function toStudioSessionDetail(
     headerBadge: assistantBadge,
     assistantName,
     participantAssistantIds: isGroupSession ? [...(sessionMeta?.participantAssistantIds || [])] : undefined,
+    childSessionIds: linkedChildSessionIds.size > 0 ? [...linkedChildSessionIds] : undefined,
     collaborationMode: isGroupSession ? sessionMeta?.collaborationMode : undefined,
     workspacePath: workspaceSnapshot?.workspacePath || session.directory,
     inputPlaceholder: isGroupSession ? `向群聊 ${assistantName} 发送消息…` : `向 ${assistantName} 发送消息…`,
@@ -669,4 +781,148 @@ function extractParticipantAssistantId(agentName: string) {
   }
   const id = agentName.slice(prefix.length).trim()
   return id || null
+}
+
+function extractTaskSessionId(toolPart: OpencodeToolPart) {
+  if (toolPart.tool !== 'task') {
+    return null
+  }
+
+  const state = toolPart.state
+  if ('metadata' in state && typeof state.metadata?.sessionId === 'string' && state.metadata.sessionId.trim()) {
+    return state.metadata.sessionId.trim()
+  }
+
+  if ('output' in state && typeof state.output === 'string') {
+    const match = state.output.match(/task_id:\s*([^\s]+)/i)
+    if (match?.[1]?.trim()) {
+      return match[1].trim()
+    }
+  }
+
+  return null
+}
+
+function mapToolPartsToCalls(
+  toolParts: OpencodeToolPart[],
+  sessionIsBusy: boolean,
+  assistantErrorMessage: string,
+): StudioToolCall[] {
+  return toolParts.map((tp) => {
+    const inputArg = tp.state.status !== 'pending'
+      ? JSON.stringify(tp.state.input ?? {}, null, 2)
+      : (tp.state as { raw: string }).raw ?? ''
+
+    let toolStatus: StudioToolCall['status'] = 'pending'
+    let result: string | undefined
+
+    if (tp.state.status === 'completed') {
+      toolStatus = 'done'
+      result = tp.state.output
+    }
+    else if (tp.state.status === 'running') {
+      if (assistantErrorMessage) {
+        toolStatus = 'failed'
+        result = assistantErrorMessage
+      }
+      else {
+        toolStatus = 'running'
+      }
+    }
+    else if (tp.state.status === 'pending') {
+      if (assistantErrorMessage) {
+        toolStatus = 'failed'
+        result = assistantErrorMessage
+      }
+      else if (sessionIsBusy) {
+        toolStatus = 'pending'
+      }
+      else {
+        toolStatus = 'running'
+      }
+    }
+    else if (tp.state.status === 'error') {
+      toolStatus = 'failed'
+      result = tp.state.error
+    }
+
+    const duration =
+      tp.state.status === 'completed' || tp.state.status === 'error'
+        ? `${((tp.state.time.end - tp.state.time.start) / 1000).toFixed(1)}s`
+        : undefined
+
+    return {
+      name: tp.tool,
+      arg: inputArg,
+      status: toolStatus,
+      result,
+      duration,
+    }
+  })
+}
+
+function extractChildSessionAssistantEntries(
+  messageRecords: OpencodeMessageRecord[],
+  sessionStatus: OpencodeSessionStatus | undefined,
+): ChildSessionEntry[] {
+  const sorted = messageRecords
+    .slice()
+    .sort((left, right) => left.info.time.created - right.info.time.created)
+  const entries: ChildSessionEntry[] = []
+  const sessionIsBusy = sessionStatus?.type === 'busy'
+
+  for (const record of sorted) {
+    if (record?.info.role !== 'assistant') {
+      continue
+    }
+
+    const assistantMsg = record.info as OpencodeAssistantMessage
+    const assistantErrorMessage = assistantMsg.error?.data?.message?.trim() || assistantMsg.error?.name?.trim() || ''
+    const toolParts = record.parts.filter((part): part is OpencodeToolPart => part.type === 'tool')
+    const textParts = record.parts
+      .filter((part): part is OpencodeTextPart => part.type === 'text' && !part.synthetic && !part.ignored)
+
+    if (toolParts.length > 0) {
+      entries.push({
+        type: 'tool-call-list',
+        id: `${record.info.sessionID}-${record.info.id}-tools`,
+        calls: mapToolPartsToCalls(toolParts, sessionIsBusy, assistantErrorMessage),
+        createdAt: record.info.time.created,
+      })
+    }
+
+    for (const part of textParts) {
+      const text = part.text.trim()
+      if (!text) {
+        continue
+      }
+
+      entries.push({
+        type: 'text',
+        id: `${record.info.sessionID}-${record.info.id}-${part.id}`,
+        content: text,
+        createdAt: part.time?.start ?? record.info.time.created,
+      })
+    }
+
+    const errorText = assistantMsg.error?.data?.message?.trim() || assistantMsg.error?.name?.trim()
+    if (errorText) {
+      entries.push({
+        type: 'text',
+        id: `${record.info.sessionID}-${record.info.id}-error`,
+        content: `执行失败：${errorText}`,
+        createdAt: record.info.time.created,
+      })
+    }
+  }
+
+  return entries
+}
+
+function resolveChildSessionTimestamp(childSession: StudioChildSession, fallback: number) {
+  const latestMessageTime = childSession.messages
+    .map(record => record.info.time.created)
+    .sort((left, right) => right - left)[0]
+
+  return latestMessageTime ?? childSession.session.time.updated ?? fallback
 }
