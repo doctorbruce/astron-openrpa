@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { MoreHorizontal, Pencil, Plus, Search, Settings, Trash2, Users, Zap } from 'lucide-vue-next'
+import { Eye, MoreHorizontal, Pencil, Plus, Search, Settings, Trash2, Users, Zap } from 'lucide-vue-next'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 import { Button } from '@/components/ui/button'
@@ -50,14 +50,28 @@ const createMenuAnchorRef = ref<HTMLElement | null>(null)
 const createMenuOpen = ref(false)
 
 const unifiedAssistants = computed<SidebarAssistantEntry[]>(() =>
-  props.groups.flatMap(group =>
-    group.assistants.map(assistant => ({
-      ...assistant,
-      groupId: group.id,
-      isCollaboration: group.id === 'collaboration',
-    })),
-  ),
+  props.groups
+    .filter(group => group.id !== 'builtin')
+    .flatMap(group =>
+      group.assistants.map(assistant => ({
+        ...assistant,
+        groupId: group.id,
+        isCollaboration: group.id === 'collaboration',
+      })),
+    ),
 )
+
+const builtinAssistant = computed<SidebarAssistantEntry | null>(() => {
+  const builtinGroup = props.groups.find(group => group.id === 'builtin')
+  if (!builtinGroup?.assistants.length)
+    return null
+  const assistant = builtinGroup.assistants[0]
+  return {
+    ...assistant,
+    groupId: 'builtin',
+    isCollaboration: false,
+  }
+})
 
 const normalizedSearchQuery = computed(() => searchQuery.value.trim().toLocaleLowerCase())
 const visibleGroups = computed<VisibleSidebarGroup[]>(() => {
@@ -305,6 +319,105 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- 星小妙置顶卡片 -->
+    <div v-if="builtinAssistant" class="px-3 pb-2 pt-1">
+      <div
+        :data-testid="`assistant-shell-${builtinAssistant.id}`"
+        class="group/builtin relative cursor-pointer overflow-hidden rounded-[16px] bg-[linear-gradient(135deg,rgba(114,111,255,0.09),rgba(93,89,255,0.05))] ring-1 ring-[rgba(114,111,255,0.12)] transition-all duration-150"
+        :class="builtinAssistant.id === focusedAssistantId
+          ? 'bg-[linear-gradient(135deg,rgba(114,111,255,0.14),rgba(93,89,255,0.09))] ring-[rgba(114,111,255,0.22)] shadow-[0_6px_18px_rgba(114,111,255,0.10)]'
+          : 'hover:bg-[linear-gradient(135deg,rgba(114,111,255,0.11),rgba(93,89,255,0.07))] hover:ring-[rgba(114,111,255,0.16)]'"
+        @click="focusAssistant(builtinAssistant.id)"
+      >
+        <div class="flex items-center gap-2.5 px-3 py-2.5">
+          <!-- 头像 -->
+          <div class="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-[13px] bg-[linear-gradient(135deg,#726FFF,#5D59FF)] shadow-[0_4px_12px_rgba(114,111,255,0.28)]">
+            <span class="text-[13px] font-bold text-white">{{ builtinAssistant.badge }}</span>
+            <!-- 官方角标 -->
+            <div class="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-[#726FFF] ring-2 ring-white">
+              <svg class="h-2.5 w-2.5 text-white" viewBox="0 0 12 12" fill="currentColor">
+                <path d="M6 1l1.236 2.506L10 3.82l-2 1.95.472 2.75L6 7.25 3.528 8.52 4 5.77 2 3.82l2.764-.314z"/>
+              </svg>
+            </div>
+          </div>
+
+          <!-- 名称和标签 -->
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-1.5">
+              <span class="text-[12px] font-semibold text-[#4F4BCC]">{{ builtinAssistant.name }}</span>
+              <span class="shrink-0 rounded-full bg-[rgba(114,111,255,0.10)] px-1.5 py-0.5 text-[9px] font-semibold leading-none text-[#726FFF]">官方</span>
+            </div>
+            <span class="mt-0.5 block truncate text-[11px] leading-[16px] text-black/42">万能助手 · 开箱即用</span>
+          </div>
+
+          <!-- 新建会话按钮 -->
+          <button
+            :data-testid="`assistant-new-session-trigger-${builtinAssistant.id}`"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-[rgba(114,111,255,0.08)] text-[#716DF8] transition-colors hover:bg-[rgba(114,111,255,0.16)] opacity-0 group-hover/builtin:opacity-100"
+            :class="builtinAssistant.id === focusedAssistantId ? 'opacity-100' : ''"
+            title="新建会话"
+            @click.stop="emit('open-new-session', builtinAssistant.id)"
+          >
+            <Plus class="h-3.5 w-3.5" />
+          </button>
+
+          <!-- 只读查看按钮 -->
+          <button
+            :data-testid="`assistant-view-trigger-${builtinAssistant.id}`"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-white/60 text-black/36 transition-colors hover:bg-white/90 opacity-0 group-hover/builtin:opacity-100"
+            :class="builtinAssistant.id === focusedAssistantId ? 'opacity-100' : ''"
+            title="查看助手"
+            @click.stop="emit('open-edit-assistant', builtinAssistant.id)"
+          >
+            <Eye class="h-3.5 w-3.5" />
+          </button>
+        </div>
+
+        <!-- 会话列表（展开时） -->
+        <div
+          v-if="builtinAssistant.id === focusedAssistantId && builtinAssistant.sessions.length > 0"
+          class="space-y-0.5 px-3 pb-2"
+        >
+          <div
+            v-for="session in builtinAssistant.sessions"
+            :key="session.id"
+            :data-testid="`assistant-session-row-${builtinAssistant.id}-${session.id}`"
+            class="group/session relative flex items-center gap-1.5 rounded-[10px] px-2 py-1 transition-colors duration-150 cursor-pointer"
+            :class="session.id === activeSessionId
+              ? 'bg-[linear-gradient(180deg,rgba(242,242,255,0.96)_0%,rgba(236,237,252,0.92)_100%)] text-[#6468A8] ring-1 ring-[rgba(182,188,232,0.34)]'
+              : 'text-black/54 hover:bg-[rgba(255,255,255,0.70)] hover:text-black/72'"
+            @click.stop="emit('select-session', builtinAssistant.id, session.id)"
+          >
+            <span
+              v-if="session.id === activeSessionId"
+              class="h-1.5 w-1.5 shrink-0 rounded-full bg-[#726FFF] shadow-[0_0_0_4px_rgba(114,111,255,0.08)]"
+            />
+            <span class="min-w-0 flex-1 truncate text-[11px] font-medium leading-[18px]">{{ session.title }}</span>
+            <div class="flex shrink-0 items-center gap-1 opacity-0 transition-all group-hover/session:opacity-100">
+              <a-popconfirm
+                placement="rightTop"
+                title="删除会话"
+                description="删除会话后，当前聊天记录和右侧产物预览将一并移除。"
+                ok-text="删除会话"
+                cancel-text="取消"
+                @confirm="emit('delete-session', builtinAssistant.id, session.id)"
+              >
+                <button
+                  class="flex h-5 w-5 items-center justify-center rounded-[7px] transition-colors hover:bg-[#FEF2F2]"
+                  title="删除会话"
+                >
+                  <Trash2 class="h-3 w-3 text-[#EF4444]" />
+                </button>
+              </a-popconfirm>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 分隔线 -->
+      <div class="mt-2 h-px bg-[rgba(114,111,255,0.08)]" />
     </div>
 
     <div class="relative mb-3 flex min-h-0 flex-1 flex-col">
