@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { Component } from 'vue'
 import { Clock, Code, Database, Puzzle, Search, Workflow } from 'lucide-vue-next'
 
 const emit = defineEmits<{
@@ -6,7 +7,7 @@ const emit = defineEmits<{
 }>()
 
 interface QuickActionCard {
-  icon: any
+  icon: Component
   title: string
   description: string
   topic: string
@@ -76,8 +77,10 @@ const quickActions: QuickActionCard[] = [
       <button
         v-for="action in quickActions"
         :key="action.title"
-        class="group relative flex flex-col items-start gap-3 rounded-[16px] p-5 text-left transition-all duration-200 hover:scale-[1.02] hover:shadow-[0_8px_24px_rgba(114,111,255,0.12)]"
+        class="group relative flex flex-col items-start gap-3 rounded-[16px] p-5 text-left transition-all duration-200 hover:scale-[1.02] hover:shadow-[0_8px_24px_rgba(114,111,255,0.12)] focus:outline-none focus:ring-2 focus:ring-[#726FFF] focus:ring-offset-2"
         :class="action.gradient"
+        :aria-label="`开始${action.title}对话`"
+        :data-testid="`builtin-welcome-action-${action.topic}`"
         @click="emit('start-chat', action.topic)"
       >
         <!-- Icon circle -->
