@@ -283,7 +283,8 @@ onMounted(() => {
           <button
             type="button"
             data-testid="assistant-workspace-picker-trigger"
-            class="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-[14px] bg-[var(--ai-surface-soft)] px-3 text-[12px] font-medium text-black/64 shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] transition-colors hover:bg-white"
+            class="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-[14px] bg-[var(--ai-surface-soft)] px-3 text-[12px] font-medium text-black/64 shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] transition-colors hover:bg-white disabled:opacity-60 disabled:cursor-not-allowed"
+            :disabled="props.readonly"
             @click="pickWorkspace"
           >
             <FolderOpen class="h-3.5 w-3.5" />
@@ -316,7 +317,7 @@ onMounted(() => {
           />
         </div>
 
-        <div v-if="isGroupTemplate" class="space-y-2">
+        <div v-if="isGroupTemplate && !props.readonly" class="space-y-2">
           <label class="flex items-center gap-1.5 text-[12px] font-medium text-black/76">
             <Users class="h-3.5 w-3.5 text-black/52" />
             协作模式
@@ -338,10 +339,11 @@ onMounted(() => {
               :key="candidate.id"
               type="button"
               :data-testid="`group-template-participant-${candidate.id}`"
-              class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] transition-all"
+              class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
               :class="groupParticipants.includes(candidate.id)
                 ? 'border-[#726FFF] bg-[#F3F1FF] text-[#5E5AE8]'
                 : 'border-[#E5E7EB] bg-white text-black/64 hover:border-[#D5D9E5]'"
+              :disabled="props.readonly"
               @click="toggleGroupParticipant(candidate.id)"
             >
               <span class="inline-flex h-5 w-5 items-center justify-center rounded-full bg-[#F5F7FF] text-[10px] font-semibold text-black/58">
@@ -445,6 +447,7 @@ onMounted(() => {
     />
     <div v-else class="flex justify-end px-6 pb-5 pt-3">
       <button
+        data-testid="assistant-readonly-close-button"
         class="rounded-[12px] bg-[rgba(114,111,255,0.08)] px-4 py-2 text-[13px] font-medium text-[#726FFF] transition-colors hover:bg-[rgba(114,111,255,0.14)]"
         @click="emit('close')"
       >
