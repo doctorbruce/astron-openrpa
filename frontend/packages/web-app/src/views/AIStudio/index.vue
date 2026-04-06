@@ -64,6 +64,9 @@ const composerMentionOptions = computed(() => {
     }
   })
 })
+const isEditingBuiltin = computed(() => {
+  return editingAssistant.value?.isBuiltin ?? false
+})
 onMounted(() => {
   document.body.classList.add('ai-assistant-preview')
 })
@@ -169,6 +172,7 @@ async function handleAssistantSubmit(payload: {
       :template-kind="assistantTemplateKind"
       :assistant="editingAssistant"
       :participant-candidates="newSessionParticipantCandidates"
+      :readonly="isEditingBuiltin"
       @close="aiStudioStore.closeNewAssistant()"
       @submit="handleAssistantSubmit"
     />

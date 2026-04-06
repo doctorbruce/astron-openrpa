@@ -97,6 +97,7 @@ watch(
       :active-surface="aiStudioStore.activeSurface"
       @select-session="handleSelectSession"
       @open-edit-assistant="aiStudioStore.openEditAssistant($event)"
+      @open-view-assistant="aiStudioStore.openEditAssistant($event)"
       @open-new-group-template="aiStudioStore.openNewGroupTemplate()"
       @open-new-session="handleOpenNewSession"
       @delete-assistant="handleDeleteAssistant"
