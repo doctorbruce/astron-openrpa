@@ -44,11 +44,13 @@ const props = withDefaults(defineProps<{
   assistant?: StudioAssistant | null
   templateKind?: 'assistant' | 'group'
   participantCandidates?: SessionParticipantCandidate[]
+  readonly?: boolean   // 只读模式（isBuiltin 助手查看时使用）
 }>(), {
   mode: 'create',
   assistant: null,
   templateKind: 'assistant',
   participantCandidates: () => [],
+  readonly: false,
 })
 
 const emit = defineEmits<{
@@ -89,6 +91,8 @@ const canSubmit = computed(() => {
   return name.value.trim().length > 0 && groupParticipants.value.length > 0
 })
 const modalTitle = computed(() => {
+  if (props.readonly)
+    return '查看 AI 助手'
   if (isGroupTemplate.value)
     return isEditMode.value ? '编辑群聊模板' : '新建群聊模板'
   return isEditMode.value ? '编辑 AI 助手模板' : '新建 AI 助手模板'
@@ -260,8 +264,9 @@ onMounted(() => {
         <Input
           v-model="name"
           data-testid="new-assistant-name-input"
-          class="h-10 rounded-[16px] border-0 bg-[var(--ai-surface-soft)] text-[13px] shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)]"
+          class="h-10 rounded-[16px] border-0 bg-[var(--ai-surface-soft)] text-[13px] shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] disabled:opacity-60 disabled:cursor-not-allowed"
           :placeholder="isGroupTemplate ? '例如：财务代码协作评审' : '例如：财务助手、代码审查官'"
+          :disabled="props.readonly"
         />
       </div>
 
@@ -271,8 +276,9 @@ onMounted(() => {
           <Input
             v-model="workspacePath"
             data-testid="assistant-workspace-path-input"
-            class="h-10 flex-1 rounded-[16px] border-0 bg-[var(--ai-surface-soft)] text-[13px] shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)]"
+            class="h-10 flex-1 rounded-[16px] border-0 bg-[var(--ai-surface-soft)] text-[13px] shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] disabled:opacity-60 disabled:cursor-not-allowed"
             placeholder="不填则默认使用 Astron 托管工作空间"
+            :disabled="props.readonly"
           />
           <button
             type="button"
@@ -304,8 +310,9 @@ onMounted(() => {
           <textarea
             v-model="persona"
             rows="3"
-            class="w-full resize-none rounded-[16px] border-0 bg-[var(--ai-surface-soft)] px-3 py-2.5 text-[13px] leading-6 text-black/76 shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] outline-none transition-colors placeholder:text-black/28 focus:ring-2 focus:ring-[var(--color-primary)]/8"
+            class="w-full resize-none rounded-[16px] border-0 bg-[var(--ai-surface-soft)] px-3 py-2.5 text-[13px] leading-6 text-black/76 shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] outline-none transition-colors placeholder:text-black/28 focus:ring-2 focus:ring-[var(--color-primary)]/8 disabled:opacity-60 disabled:cursor-not-allowed"
             :placeholder="isGroupTemplate ? '描述群聊模板的职责边界和适用任务' : '描述助手的身份、性格和行为准则'"
+            :disabled="props.readonly"
           />
         </div>
 
@@ -356,8 +363,9 @@ onMounted(() => {
           <textarea
             v-model="capabilities"
             rows="2"
-            class="w-full resize-none rounded-[16px] border-0 bg-[var(--ai-surface-soft)] px-3 py-2.5 text-[13px] leading-6 text-black/76 shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] outline-none transition-colors placeholder:text-black/28 focus:ring-2 focus:ring-[var(--color-primary)]/8"
+            class="w-full resize-none rounded-[16px] border-0 bg-[var(--ai-surface-soft)] px-3 py-2.5 text-[13px] leading-6 text-black/76 shadow-[inset_0_0_0_1px_rgba(215,224,239,0.9)] outline-none transition-colors placeholder:text-black/28 focus:ring-2 focus:ring-[var(--color-primary)]/8 disabled:opacity-60 disabled:cursor-not-allowed"
             :placeholder="isGroupTemplate ? '例如：跨财务与代码评审的联调协作' : '描述助手具备的核心能力'"
+            :disabled="props.readonly"
           />
         </div>
 
@@ -375,8 +383,9 @@ onMounted(() => {
             <Input
               v-model="skillSearch"
               data-testid="assistant-skill-search-input"
-              class="h-9 rounded-[14px] border-0 bg-[var(--ai-surface-soft)] pl-9 text-[12px] shadow-[inset_0_0_0_1px_rgba(215,224,239,0.84)]"
+              class="h-9 rounded-[14px] border-0 bg-[var(--ai-surface-soft)] pl-9 text-[12px] shadow-[inset_0_0_0_1px_rgba(215,224,239,0.84)] disabled:opacity-60 disabled:cursor-not-allowed"
               placeholder="搜索技能，例如：RPA、数据、审批"
+              :disabled="props.readonly"
             />
           </div>
 
@@ -410,8 +419,9 @@ onMounted(() => {
                 :class="skills.includes(skill.id)
                   ? 'border-[#726FFF] bg-[#726FFF] text-white'
                   : 'border-[var(--ai-line)] bg-white text-black/58 hover:border-[var(--color-primary)]/30 hover:bg-[#FAFAFF]'"
-                class="flex h-10 w-full items-center gap-2.5 rounded-[14px] border px-3 text-left transition-none"
+                class="flex h-10 w-full items-center gap-2.5 rounded-[14px] border px-3 text-left transition-none disabled:opacity-60 disabled:cursor-not-allowed"
                 :title="skill.description || skill.name"
+                :disabled="props.readonly"
                 @click="toggleSkill(skill.id)"
               >
                 <div class="rounded-[8px] bg-black/5 px-1.5 py-0.5 text-[9px] font-semibold" :class="skills.includes(skill.id) ? 'bg-white/18 text-white/88' : 'text-black/42'">
@@ -426,11 +436,20 @@ onMounted(() => {
     </div>
 
     <ModalActionBar
+      v-if="!props.readonly"
       test-id="assistant"
       :submit-label="submitLabel"
       :submit-disabled="!canSubmit"
       @cancel="emit('close')"
       @submit="handleSubmit"
     />
+    <div v-else class="flex justify-end px-6 pb-5 pt-3">
+      <button
+        class="rounded-[12px] bg-[rgba(114,111,255,0.08)] px-4 py-2 text-[13px] font-medium text-[#726FFF] transition-colors hover:bg-[rgba(114,111,255,0.14)]"
+        @click="emit('close')"
+      >
+        关闭
+      </button>
+    </div>
   </ModalShell>
 </template>
