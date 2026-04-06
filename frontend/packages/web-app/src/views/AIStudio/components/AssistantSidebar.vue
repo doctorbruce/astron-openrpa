@@ -36,6 +36,7 @@ const emit = defineEmits<{
   (e: 'open-new-assistant'): void
   (e: 'open-new-group-template'): void
   (e: 'open-edit-assistant', assistantId: string): void
+  (e: 'open-view-assistant', assistantId: string): void
   (e: 'open-new-session', assistantId: string): void
   (e: 'delete-assistant', assistantId: string): void
   (e: 'delete-session', assistantId: string, sessionId: string): void
@@ -127,22 +128,28 @@ const visibleGroups = computed<VisibleSidebarGroup[]>(() => {
 })
 
 function resolveAssistantIdBySession(sessionId: string) {
-  return unifiedAssistants.value.find(assistant =>
+  const found = unifiedAssistants.value.find(assistant =>
     assistant.sessions.some(session => session.id === sessionId),
-  )?.id
+  )
+  if (found)
+    return found.id
+  if (builtinAssistant.value?.sessions.some(s => s.id === sessionId))
+    return builtinAssistant.value.id
+  return undefined
 }
 
 function syncFocusedAssistant() {
   const assistants = unifiedAssistants.value
 
-  if (!assistants.length) {
-    focusedAssistantId.value = ''
-    return
-  }
-
   const activeAssistantId = resolveAssistantIdBySession(props.activeSessionId)
   if (activeAssistantId) {
     focusedAssistantId.value = activeAssistantId
+    return
+  }
+
+  if (!assistants.length) {
+    if (builtinAssistant.value)
+      focusedAssistantId.value = builtinAssistant.value.id
     return
   }
 
@@ -154,6 +161,7 @@ function syncFocusedAssistant() {
 
 watch(() => props.activeSessionId, syncFocusedAssistant, { immediate: true })
 watch(unifiedAssistants, syncFocusedAssistant)
+watch(builtinAssistant, syncFocusedAssistant)
 
 function canExpand(assistant: StudioAssistant) {
   return assistant.sessions.length > 0
@@ -355,8 +363,8 @@ onBeforeUnmount(() => {
           <!-- 新建会话按钮 -->
           <button
             :data-testid="`assistant-new-session-trigger-${builtinAssistant.id}`"
-            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-[rgba(114,111,255,0.08)] text-[#716DF8] transition-colors hover:bg-[rgba(114,111,255,0.16)] opacity-0 group-hover/builtin:opacity-100"
-            :class="builtinAssistant.id === focusedAssistantId ? 'opacity-100' : ''"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-[rgba(114,111,255,0.08)] text-[#716DF8] transition-all hover:bg-[rgba(114,111,255,0.16)]"
+            :class="builtinAssistant.id === focusedAssistantId ? 'opacity-100' : 'opacity-0 group-hover/builtin:opacity-100'"
             title="新建会话"
             @click.stop="emit('open-new-session', builtinAssistant.id)"
           >
@@ -366,10 +374,10 @@ onBeforeUnmount(() => {
           <!-- 只读查看按钮 -->
           <button
             :data-testid="`assistant-view-trigger-${builtinAssistant.id}`"
-            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-white/60 text-black/36 transition-colors hover:bg-white/90 opacity-0 group-hover/builtin:opacity-100"
-            :class="builtinAssistant.id === focusedAssistantId ? 'opacity-100' : ''"
+            class="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-white/60 text-black/36 transition-all hover:bg-white/90"
+            :class="builtinAssistant.id === focusedAssistantId ? 'opacity-100' : 'opacity-0 group-hover/builtin:opacity-100'"
             title="查看助手"
-            @click.stop="emit('open-edit-assistant', builtinAssistant.id)"
+            @click.stop="emit('open-view-assistant', builtinAssistant.id)"
           >
             <Eye class="h-3.5 w-3.5" />
           </button>
@@ -384,17 +392,21 @@ onBeforeUnmount(() => {
             v-for="session in builtinAssistant.sessions"
             :key="session.id"
             :data-testid="`assistant-session-row-${builtinAssistant.id}-${session.id}`"
-            class="group/session relative flex items-center gap-1.5 rounded-[10px] px-2 py-1 transition-colors duration-150 cursor-pointer"
+            class="group/session relative flex items-center gap-1.5 rounded-[10px] px-2 py-1 transition-colors duration-150"
             :class="session.id === activeSessionId
               ? 'bg-[linear-gradient(180deg,rgba(242,242,255,0.96)_0%,rgba(236,237,252,0.92)_100%)] text-[#6468A8] ring-1 ring-[rgba(182,188,232,0.34)]'
               : 'text-black/54 hover:bg-[rgba(255,255,255,0.70)] hover:text-black/72'"
-            @click.stop="emit('select-session', builtinAssistant.id, session.id)"
           >
-            <span
-              v-if="session.id === activeSessionId"
-              class="h-1.5 w-1.5 shrink-0 rounded-full bg-[#726FFF] shadow-[0_0_0_4px_rgba(114,111,255,0.08)]"
-            />
-            <span class="min-w-0 flex-1 truncate text-[11px] font-medium leading-[18px]">{{ session.title }}</span>
+            <button
+              class="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+              @click="emit('select-session', builtinAssistant.id, session.id)"
+            >
+              <span
+                v-if="session.id === activeSessionId"
+                class="h-1.5 w-1.5 shrink-0 rounded-full bg-[#726FFF] shadow-[0_0_0_4px_rgba(114,111,255,0.08)]"
+              />
+              <span class="min-w-0 flex-1 truncate text-[11px] font-medium leading-[18px]">{{ session.title }}</span>
+            </button>
             <div class="flex shrink-0 items-center gap-1 opacity-0 transition-all group-hover/session:opacity-100">
               <a-popconfirm
                 placement="rightTop"
@@ -405,6 +417,7 @@ onBeforeUnmount(() => {
                 @confirm="emit('delete-session', builtinAssistant.id, session.id)"
               >
                 <button
+                  :data-testid="`session-delete-trigger-${builtinAssistant.id}-${session.id}`"
                   class="flex h-5 w-5 items-center justify-center rounded-[7px] transition-colors hover:bg-[#FEF2F2]"
                   title="删除会话"
                 >
