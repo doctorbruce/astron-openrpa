@@ -1,7 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
 import { getOpencodeDesktopApi, opencodeAIStudioProvider } from '@/views/AIStudio/providers/opencodeProvider'
-import { applyStreamingTextDelta, applyStreamingTextPart } from './aiStudioStreaming'
 
 import type {
   AIStudioCardActionPayload,
@@ -39,6 +38,12 @@ type CreateAssistantPayload = {
   templateKind?: 'assistant' | 'group'
   groupParticipantAssistantIds?: string[]
   groupCollaborationMode?: StudioCollaborationMode
+}
+
+type CreateSessionOptions = {
+  workspacePath?: string
+  title?: string
+  seedPrompt?: string
 }
 
 function cloneGroups(groups: StudioAssistantGroup[]) {
@@ -103,6 +108,8 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
   const pendingMutation = ref<PendingMutation>(null)
   const isAiTyping = ref(false)
   const sessionModelSelection = ref<StudioSessionModelSelectionState | null>(null)
+  const focusedAssistantId = ref<string | null>(null)
+  const showBuiltinWelcome = ref(false)
   let runtimeRefreshTimer: ReturnType<typeof setTimeout> | null = null
   let runtimeRefreshInFlight = false
   let queuedRuntimeRefreshSessionId: string | null = null
@@ -193,7 +200,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
   function mutateSessionDetail(sessionId: string, mapper: (session: StudioSessionDetail) => StudioSessionDetail) {
     const current = sessionMap.value[sessionId]
     if (!current)
-      return
+      return null
     updateSessionDetail(mapper(current))
   }
 
@@ -230,7 +237,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
   function touchSession(sessionId: string) {
     const assistantId = findAssistantIdBySession(sessionId)
     if (!assistantId)
-      return
+      return null
 
     mutateAssistant(assistantId, assistant => ({
       ...assistant,
@@ -257,19 +264,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     }))
   }
 
-  async function loadSessionModelSelection(sessionId: string) {
-    if (!sessionId) {
-      sessionModelSelection.value = null
-      return null
-    }
-
-    const selection = await getOpencodeDesktopApi().getSessionModelSelection(sessionId) as StudioSessionModelSelectionState
-    if (activeSessionId.value === sessionId) {
-      sessionModelSelection.value = selection
-    }
-    return selection
-  }
-
   async function loadSessionDetail(
     sessionId: string,
     options: { force?: boolean, includeWorkspace?: boolean } = {},
@@ -281,6 +275,18 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     const detail = await provider.getSessionDetail(sessionId, { includeWorkspace })
     const mergedDetail = mergeWorkspaceSnapshot(sessionMap.value[sessionId], detail, includeWorkspace)
     return updateSessionDetail(mergedDetail)
+  }
+
+  async function loadSessionModelSelection(sessionId: string) {
+    if (!sessionId) {
+      sessionModelSelection.value = null
+      return null
+    }
+
+    const selection = await getOpencodeDesktopApi().getSessionModelSelection(sessionId) as StudioSessionModelSelectionState
+    if (activeSessionId.value === sessionId)
+      sessionModelSelection.value = selection
+    return selection
   }
 
   async function runMutation(meta: NonNullable<PendingMutation>, task: () => Promise<AIStudioSessionMutationResult>) {
@@ -310,11 +316,25 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
       if (!initialized.value) {
         const bootstrap = await provider.getBootstrap()
         assistantGroups.value = cloneGroups(bootstrap.assistantGroups)
-        activeSessionId.value = sessionId || bootstrap.defaultSessionId || INITIAL_SESSION_ID
+        const builtinAssistantId = bootstrap.assistantGroups.find(group => group.id === 'builtin')?.assistants[0]?.id || null
+        if (!sessionId && builtinAssistantId) {
+          activeSessionId.value = INITIAL_SESSION_ID
+          focusedAssistantId.value = builtinAssistantId
+          showBuiltinWelcome.value = true
+        }
+        else {
+          activeSessionId.value = sessionId || bootstrap.defaultSessionId || INITIAL_SESSION_ID
+          if (activeSessionId.value) {
+            showBuiltinWelcome.value = false
+          }
+        }
         initialized.value = true
       }
       else {
         activeSessionId.value = sessionId || activeSessionId.value || INITIAL_SESSION_ID
+        if (sessionId) {
+          showBuiltinWelcome.value = false
+        }
       }
 
       if (activeSessionId.value) {
@@ -338,6 +358,8 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
 
   async function setActiveSession(sessionId: string) {
     activeSessionId.value = sessionId || INITIAL_SESSION_ID
+    if (activeSessionId.value)
+      showBuiltinWelcome.value = false
     workspaceOpen.value = false
     invitedAssistants.value = []
     isAiTyping.value = false
@@ -362,9 +384,8 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
 
   function openSurface(surface: 'main' | 'automation' | 'settings') {
     activeSurface.value = surface
-    if (surface === 'main' && activeSessionId.value) {
+    if (surface === 'main' && activeSessionId.value)
       void loadSessionModelSelection(activeSessionId.value)
-    }
   }
 
   function toggleWorkspace() {
@@ -509,20 +530,21 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     return assistantId
   }
 
-  async function createSessionForAssistant(assistantId: string) {
+  async function createSessionForAssistant(assistantId: string, options: CreateSessionOptions = {}) {
     const targetAssistant = findAssistantById(assistantId)
     if (!targetAssistant)
       return null
 
-    const workspacePath = targetAssistant.workspacePath?.trim() || '~/Documents'
+    const workspacePath = options.workspacePath?.trim() || targetAssistant.workspacePath?.trim() || '~/Documents'
     const isGroupSession = !!targetAssistant.groupParticipantAssistantIds?.length || !!targetAssistant.groupCollaborationMode
     const title = isGroupSession
-      ? `${targetAssistant.name} 协作会话`
+      ? `${targetAssistant.name} 群聊会话`
       : `${targetAssistant.name} 新会话`
 
+    const resolvedTitle = options.title?.trim() || title
     const result = await provider.createSession!({
       assistantId: isGroupSession ? '' : targetAssistant.id,
-      title,
+      title: resolvedTitle,
       workspacePath,
       agentId: isGroupSession ? targetAssistant.id : undefined,
     })
@@ -532,7 +554,7 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     })
     const createdSession: StudioSession = {
       id: createdDetail.id,
-      title: createdDetail.headerTitle || title,
+      title: createdDetail.headerTitle || resolvedTitle,
       time: '刚刚',
     }
 
@@ -541,8 +563,25 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
       sessions: [createdSession, ...assistant.sessions],
     }))
 
+    const seedPrompt = options.seedPrompt?.trim()
+    if (seedPrompt) {
+      try {
+        await provider.sendMessage({
+          sessionId: createdDetail.id,
+          content: seedPrompt,
+          attachments: [],
+          providerId: sessionModelSelection.value?.effective?.providerId ?? null,
+          model: sessionModelSelection.value?.effective?.model ?? null,
+        })
+      }
+      catch (error) {
+        console.warn('failed to send seed prompt', error)
+      }
+    }
+
     activeSurface.value = 'main'
     activeSessionId.value = createdDetail.id
+    showBuiltinWelcome.value = false
     workspaceOpen.value = false
     return createdDetail.id
   }
@@ -780,17 +819,6 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     return undefined
   }
 
-  function resolveRuntimeRefreshSessionId(eventSessionId: string | undefined) {
-    if (!eventSessionId || !activeSessionId.value)
-      return null
-
-    if (eventSessionId === activeSessionId.value)
-      return activeSessionId.value
-
-    const linkedChildSessionIds = sessionMap.value[activeSessionId.value]?.childSessionIds || []
-    return linkedChildSessionIds.includes(eventSessionId) ? activeSessionId.value : null
-  }
-
   async function flushRuntimeSessionRefresh(sessionId: string) {
     if (sessionId !== activeSessionId.value)
       return
@@ -843,6 +871,45 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     }, 120)
   }
 
+  function setFocusedAssistant(assistantId: string | null) {
+    focusedAssistantId.value = assistantId
+  }
+
+  function signalBuiltinClicked() {
+    showBuiltinWelcome.value = true
+    activeSessionId.value = INITIAL_SESSION_ID
+  }
+
+  async function startBuiltinChat(topic: string): Promise<string | null> {
+    const builtinGroup = assistantGroups.value.find(group => group.id === 'builtin')
+    const builtinAssistant = builtinGroup?.assistants[0]
+
+    if (!builtinAssistant) {
+      console.error('Builtin assistant not found')
+      return null
+    }
+
+    if (!provider.createSession) {
+      console.error('createSession not supported by provider')
+      return null
+    }
+
+    try {
+      const sessionId = await createSessionForAssistant(builtinAssistant.id, {
+        seedPrompt: topic,
+      })
+      if (!sessionId)
+        return null
+      setFocusedAssistant(builtinAssistant.id)
+      showBuiltinWelcome.value = false
+      return sessionId
+    }
+    catch (error) {
+      errorMessage.value = error instanceof Error ? error.message : '启动会话失败'
+      return null
+    }
+  }
+
   // Subscribe to opencode runtime events for real-time session updates.
   // This is the primary mechanism for receiving AI responses and message updates —
   // sendMessage only triggers async processing; results arrive via this event stream.
@@ -852,77 +919,32 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
       if (!event?.type) return
 
       const eventSessionId = extractRuntimeEventSessionId(event)
-      const refreshSessionId = resolveRuntimeRefreshSessionId(eventSessionId)
-      if (!eventSessionId || !refreshSessionId) return
-      const isDirectRootEvent = eventSessionId === activeSessionId.value
+      if (!eventSessionId || eventSessionId !== activeSessionId.value) return
 
       if (event.type === 'session.status') {
         const status = event.properties.status as { type: string } | undefined
         if (status?.type === 'busy') isAiTyping.value = true
       }
-      else if (event.type === 'message.part.delta') {
-        if (!isDirectRootEvent) {
-          scheduleRuntimeSessionRefresh(refreshSessionId)
-          return
-        }
-
-        const messageId = event.properties.messageID as string | undefined
-        const partId = event.properties.partID as string | undefined
-        const field = event.properties.field as string | undefined
-        const delta = event.properties.delta as string | undefined
-
-        if (messageId && partId && field && delta && sessionMap.value[refreshSessionId]) {
-          mutateSessionDetail(refreshSessionId, session =>
-            applyStreamingTextDelta(session, {
-              messageId,
-              partId,
-              field,
-              delta,
-            }),
-          )
-          if (field === 'text')
-            isAiTyping.value = false
-        }
-      }
-      else if (event.type === 'message.part.updated') {
-        if (!isDirectRootEvent) {
-          scheduleRuntimeSessionRefresh(refreshSessionId)
-          return
-        }
-
-        const part = event.properties.part as { type?: string, messageID?: string, text?: string } | undefined
-        if (part?.type === 'text' && part.messageID && typeof part.text === 'string' && sessionMap.value[refreshSessionId]) {
-          mutateSessionDetail(refreshSessionId, session =>
-            applyStreamingTextPart(session, {
-              messageId: part.messageID!,
-              text: part.text ?? '',
-            }),
-          )
-          if (part.text.trim())
-            isAiTyping.value = false
-        }
-        else {
-          scheduleRuntimeSessionRefresh(refreshSessionId)
-        }
-      }
       else if (event.type === 'session.error') {
         isAiTyping.value = false
         const runtimeError = event.properties.error as { data?: { message?: string } } | undefined
         errorMessage.value = runtimeError?.data?.message || 'AI Studio 运行失败'
-        scheduleRuntimeSessionRefresh(refreshSessionId, true)
+        scheduleRuntimeSessionRefresh(eventSessionId, true)
       }
       else if (event.type === 'session.idle') {
         isAiTyping.value = false
-        scheduleRuntimeSessionRefresh(refreshSessionId, true)
+        scheduleRuntimeSessionRefresh(eventSessionId, true)
       }
       else if (
         event.type === 'message.updated'
         || event.type === 'message.removed'
+        || event.type === 'message.part.updated'
+        || event.type === 'message.part.delta'
         || event.type === 'message.part.removed'
         || event.type === 'session.updated'
         || event.type === 'session.created'
       ) {
-        scheduleRuntimeSessionRefresh(refreshSessionId)
+        scheduleRuntimeSessionRefresh(eventSessionId)
       }
     })
   }
@@ -967,9 +989,14 @@ export const useAIStudioStore = defineStore('aiStudio', () => {
     sessionMap,
     sessionModelSelection,
     setActiveSession,
+    setFocusedAssistant,
     setWorkspaceOpen,
+    focusedAssistantId,
+    showBuiltinWelcome,
     showInviteAssistant,
     showNewAssistant,
+    signalBuiltinClicked,
+    startBuiltinChat,
     submitCardAction,
     submitChoiceForm,
     submitParamForm,

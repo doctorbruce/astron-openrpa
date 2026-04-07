@@ -77,6 +77,17 @@ async function handleOpenNewSession(assistantId: string) {
   })
 }
 
+function handleSetFocusedAssistant(assistantId: string | null) {
+  aiStudioStore.setFocusedAssistant(assistantId)
+}
+
+function handleClickAssistant(assistantId: string) {
+  const builtinGroup = assistantGroups.value.find(g => g.id === 'builtin')
+  const isBuiltin = builtinGroup?.assistants.some(a => a.id === assistantId)
+  if (isBuiltin)
+    aiStudioStore.signalBuiltinClicked()
+}
+
 watch(
   [isAIStudio, routeSessionId],
   ([visible, sessionId]) => {

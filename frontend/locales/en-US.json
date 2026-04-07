@@ -25,7 +25,7 @@
   "addItem": "Add item",
   "addVariable": "Adding variables",
   "advancedParameters": "Advanced",
-  "aiAssistant": "AI Assistant",
+  "aiAssistant": "AI Workshop",
   "aiChatHello": "Hello, I'm iFlytek Spark RPA!",
   "aiChatHelloText": "You can generate the tasks you need to perform by natural language description + check \"Generate Content Form\": 1. Tick \"Business Flow\" > generate business flow 2. Tick \"RPA Script\" > generate RPA script, which will improve your work efficiency, come and experience it~",
   "aiChatHelloTip": "For detailed instructions, please see the ",
