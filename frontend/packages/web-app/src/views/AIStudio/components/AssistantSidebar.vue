@@ -42,6 +42,8 @@ const emit = defineEmits<{
   (e: 'delete-session', assistantId: string, sessionId: string): void
   (e: 'open-automation'): void
   (e: 'open-settings'): void
+  (e: 'click-assistant', assistantId: string): void
+  (e: 'set-focused-assistant', assistantId: string | null): void
 }>()
 
 const searchQuery = ref('')
@@ -170,6 +172,8 @@ function canExpand(assistant: StudioAssistant) {
 function focusAssistant(assistantId: string) {
   focusedAssistantId.value = assistantId
   confirmingAssistantDeleteId.value = null
+  emit('set-focused-assistant', assistantId)
+  emit('click-assistant', assistantId)
 }
 
 function isRunning(assistant: SidebarAssistantEntry) {
