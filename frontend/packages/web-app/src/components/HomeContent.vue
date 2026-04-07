@@ -116,6 +116,8 @@ watch(
       @open-new-assistant="aiStudioStore.openNewAssistant()"
       @open-automation="aiStudioStore.openSurface('automation')"
       @open-settings="aiStudioStore.openSurface('settings')"
+      @set-focused-assistant="handleSetFocusedAssistant"
+      @click-assistant="handleClickAssistant"
     />
     <SiderMenu v-else />
 
