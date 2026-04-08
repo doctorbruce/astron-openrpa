@@ -218,7 +218,7 @@ const groupInlineParticipants = computed(() => groupParticipants.value.slice(0, 
 const groupCoordinatorSummary = computed(() => {
   if (props.session.mode !== 'group')
     return ''
-  return '主 Agent：通用协调器（仅调度）'
+  return '系统协调助手：仅负责任务调度'
 })
 const groupModeSummary = computed(() => {
   if (props.session.mode !== 'group')

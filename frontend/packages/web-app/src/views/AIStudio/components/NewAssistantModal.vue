@@ -353,7 +353,7 @@ onMounted(() => {
             </button>
           </div>
           <div class="text-[10px] leading-4 text-black/36">
-            主 Agent 为系统通用协调器，不在此处配置。
+            系统协调助手用于任务编排，不在此处配置。
           </div>
         </div>
 

@@ -20,6 +20,8 @@ export type StudioSession = {
   active?: boolean
 }
 
+export const BUILTIN_ASSISTANT_ID = '__builtin_xingxiaomiao__'
+
 export type StudioAssistant = {
   id: string
   name: string
@@ -33,6 +35,7 @@ export type StudioAssistant = {
   skills?: StudioAssistantSkill[]
   groupParticipantAssistantIds?: string[]
   groupCollaborationMode?: 'auto' | 'pipeline' | 'race' | 'debate'
+  isBuiltin?: boolean
 }
 
 export type StudioAssistantSkill = {
@@ -321,7 +324,34 @@ export function toStudioAssistantGroups(
   const groups: StudioAssistantGroup[] = []
   const skillsById = new Map(skills.map(skill => [skill.id, skill]))
 
-  const singleAssistants: StudioAssistant[] = assistants.map((assistant) => {
+  const builtinRecord = assistants.find((a) => a.id === BUILTIN_ASSISTANT_ID)
+  const regularAssistants = assistants.filter((a) => a.id !== BUILTIN_ASSISTANT_ID)
+
+  if (builtinRecord) {
+    const sessions = sessionsByAssistantId.get(builtinRecord.id) ?? []
+    groups.push({
+      id: 'builtin',
+      title: '官方助手',
+      assistants: [{
+        id: builtinRecord.id,
+        name: builtinRecord.name,
+        badge: getAssistantBadge(builtinRecord),
+        status: '待命',
+        workspacePath: builtinRecord.workspacePath,
+        persona: builtinRecord.systemPrompt ?? undefined,
+        capabilities: builtinRecord.description ?? undefined,
+        isBuiltin: true,
+        sessions: sessions.map((s) => ({
+          id: s.id,
+          title: s.title || '未命名会话',
+          time: formatRelativeTime(s.time.updated),
+          active: false,
+        })),
+      }],
+    })
+  }
+
+  const singleAssistants: StudioAssistant[] = regularAssistants.map((assistant) => {
     const sessions = sessionsByAssistantId.get(assistant.id) ?? []
     const resolvedSkills = assistant.skillIds
       .map((skillId) => {

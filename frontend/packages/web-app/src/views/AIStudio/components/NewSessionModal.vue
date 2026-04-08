@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Users } from 'lucide-vue-next'
+import { FolderOpen, Users } from 'lucide-vue-next'
 import { computed, ref, watch } from 'vue'
 
 import { Input } from '@/components/ui/input'
@@ -13,6 +13,11 @@ type SessionParticipantCandidate = {
   id: string
   name: string
   badge: string
+}
+
+type WorkspacePickerResult = {
+  canceled: boolean
+  path: string | null
 }
 
 const props = defineProps<{
@@ -62,6 +67,22 @@ watch(
   { immediate: true },
 )
 
+function getDesktopApi() {
+  if (typeof window === 'undefined')
+    return null
+  return window.opencodeApi ?? null
+}
+
+async function pickWorkspace() {
+  const api = getDesktopApi()
+  if (!api?.pickWorkspace || isWorkspacePathLocked.value)
+    return
+
+  const result = await api.pickWorkspace(workspacePath.value || null) as WorkspacePickerResult
+  if (!result.canceled && result.path)
+    workspacePath.value = result.path
+}
+
 function handleSubmit() {
   if (!canCreate.value)
     return
@@ -79,9 +100,9 @@ function handleSubmit() {
 
 <template>
   <ModalShell
-    :title="isGroupSessionMode ? `新建「${props.assistantName}」群聊` : `与「${props.assistantName}」新建会话`"
+    :title="isGroupSessionMode ? `新建「${props.assistantName}」群聊会话` : `与「${props.assistantName}」新建会话`"
     :description="isGroupSessionMode ? '群聊会话会绑定工作目录；参与助手与协作模式继承自群聊模板。' : undefined"
-    :width-class="isGroupSessionMode ? 'w-[560px]' : 'w-[400px]'"
+    :width-class="isGroupSessionMode ? 'w-[560px]' : 'w-[460px]'"
     close-label="关闭新建会话"
     @close="emit('close')"
   >
@@ -99,18 +120,30 @@ function handleSubmit() {
 
         <div class="space-y-1.5">
           <label class="block text-[12px] font-medium leading-4 text-black/76">工作目录</label>
-          <Input
-            v-model="workspacePath"
-            data-testid="new-session-workspace-input"
-            :readonly="isWorkspacePathLocked"
-            class="h-10 rounded-[12px] border border-[#E5E7EB] bg-white px-3 text-[13px] text-black/72 shadow-none"
-            placeholder="请输入工作目录，例如 ~/Projects/demo"
-          />
+          <div class="flex items-center gap-2">
+            <Input
+              v-model="workspacePath"
+              data-testid="new-session-workspace-input"
+              :readonly="isWorkspacePathLocked"
+              class="h-10 rounded-[12px] border border-[#E5E7EB] bg-white px-3 text-[13px] text-black/72 shadow-none"
+              placeholder="请输入工作目录，例如 ~/Projects/demo"
+            />
+            <button
+              type="button"
+              data-testid="new-session-workspace-picker-trigger"
+              class="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-[12px] border border-[#E5E7EB] bg-white px-3 text-[12px] text-black/66 transition-colors hover:bg-[#F8FAFF] disabled:cursor-not-allowed disabled:opacity-60"
+              :disabled="isWorkspacePathLocked"
+              @click="pickWorkspace"
+            >
+              <FolderOpen class="h-3.5 w-3.5" />
+              <span>选择</span>
+            </button>
+          </div>
         </div>
 
         <template v-if="isGroupSessionMode">
           <div class="rounded-[12px] bg-[#F8FAFF] px-3 py-2 text-[11px] leading-5 text-black/52">
-            主 Agent 为系统通用协调器：负责澄清、分发、汇总；不绑定 Skills/MCP，不直接执行任务。
+            系统协调助手仅负责任务编排，不直接执行工具调用。
           </div>
 
           <div class="space-y-2">
@@ -143,7 +176,7 @@ function handleSubmit() {
 
     <ModalActionBar
       test-id="session"
-      :submit-label="isGroupSessionMode ? '创建群聊' : '开始'"
+      :submit-label="isGroupSessionMode ? '创建群聊' : '开始会话'"
       :submit-disabled="!canCreate"
       @cancel="emit('close')"
       @submit="handleSubmit"

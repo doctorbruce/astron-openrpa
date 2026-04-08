@@ -20,6 +20,7 @@ import { createAssistantStore } from './store/assistant-store'
 import { createSettingsStore } from './store/settings-store'
 import { createSessionStore } from './store/session-store'
 import { registerOpencodeIpc } from './opencode-ipc'
+import { BUILTIN_ASSISTANT_ID } from './opencode/adapter'
 
 const startTime = Date.now()
 globalThis.MainWindowLoaded = false
@@ -174,6 +175,16 @@ function registerRpaProtocol() {
 async function ready() {
   logger.info('app ready')
   await checkProcess()
+  await assistantStore.ensureAssistant(BUILTIN_ASSISTANT_ID, {
+    name: '星小妙',
+    description: '官方预置助手，随时为你解答问题',
+    systemPrompt: null,
+    avatar: null,
+    color: null,
+    skillIds: [],
+    toolIds: [],
+    toolPolicy: 'allow_assigned',
+  }).catch((err) => logger.warn('failed to seed builtin assistant', err instanceof Error ? err.message : String(err)))
   sessionHanlder()
   registerRpaProtocol()
   listenRender()

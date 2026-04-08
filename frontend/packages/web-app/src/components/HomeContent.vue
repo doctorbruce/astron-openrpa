@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { Auth } from '@rpa/components/auth'
 import { storeToRefs } from 'pinia'
-import { computed, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import AIStudioSidebar from '@/views/AIStudio/components/AssistantSidebar.vue'
+import NewSessionModal from '@/views/AIStudio/components/NewSessionModal.vue'
 
 import MarketSiderMenu from '@/components/MarketSiderMenu.vue'
 import SiderMenu from '@/components/SiderMenu.vue'
@@ -26,6 +27,42 @@ const isMarket = computed(() => route.matched[0].name === APPLICATIONMARKET)
 const isAIStudio = computed(() => route.matched[0].name === AIASSISTANT)
 const routeDefaultSessionId = ''
 const routeSessionId = computed(() => String(route.query.sessionId || routeDefaultSessionId))
+const showNewSessionModal = ref(false)
+const pendingNewSessionAssistantId = ref<string | null>(null)
+
+type SidebarAssistantMeta = {
+  id: string
+  name: string
+  workspacePath?: string
+  groupId: string
+  groupParticipantAssistantIds?: string[]
+  groupCollaborationMode?: 'auto' | 'pipeline' | 'race' | 'debate'
+  isBuiltin?: boolean
+  badge: string
+}
+
+const assistantMetas = computed<SidebarAssistantMeta[]>(() =>
+  assistantGroups.value.flatMap(group =>
+    group.assistants.map(assistant => ({
+      id: assistant.id,
+      name: assistant.name,
+      badge: assistant.badge,
+      workspacePath: assistant.workspacePath,
+      groupId: group.id,
+      groupParticipantAssistantIds: assistant.groupParticipantAssistantIds,
+      groupCollaborationMode: assistant.groupCollaborationMode,
+      isBuiltin: assistant.isBuiltin,
+    })),
+  ),
+)
+
+const pendingNewSessionAssistant = computed(() =>
+  assistantMetas.value.find(assistant => assistant.id === pendingNewSessionAssistantId.value) || null,
+)
+
+function findAssistantMeta(assistantId: string) {
+  return assistantMetas.value.find(assistant => assistant.id === assistantId) || null
+}
 
 async function handleSelectSession(_assistantId: string, sessionId: string) {
   aiStudioStore.openSurface('main')
@@ -66,6 +103,22 @@ async function handleDeleteAssistant(assistantId: string) {
 
 async function handleOpenNewSession(assistantId: string) {
   aiStudioStore.openSurface('main')
+  const assistant = findAssistantMeta(assistantId)
+  if (!assistant)
+    return
+
+  const isGroupAssistant = assistant.groupId === 'collaboration' || !!assistant.groupParticipantAssistantIds?.length || !!assistant.groupCollaborationMode
+  const shouldOpenModal = !assistant.isBuiltin && !isGroupAssistant
+
+  if (shouldOpenModal) {
+    pendingNewSessionAssistantId.value = assistantId
+    showNewSessionModal.value = true
+    aiStudioStore.showBuiltinWelcome = false
+    aiStudioStore.setFocusedAssistant(assistantId)
+    void aiStudioStore.setActiveSession('')
+    return
+  }
+
   const sessionId = await aiStudioStore.createSessionForAssistant(assistantId)
   if (!sessionId)
     return
@@ -82,10 +135,46 @@ function handleSetFocusedAssistant(assistantId: string | null) {
 }
 
 function handleClickAssistant(assistantId: string) {
-  const builtinGroup = assistantGroups.value.find(g => g.id === 'builtin')
-  const isBuiltin = builtinGroup?.assistants.some(a => a.id === assistantId)
-  if (isBuiltin)
+  const assistant = findAssistantMeta(assistantId)
+  if (!assistant)
+    return
+  if (assistant.isBuiltin) {
     aiStudioStore.signalBuiltinClicked()
+  }
+  else {
+    aiStudioStore.showBuiltinWelcome = false
+    void aiStudioStore.setActiveSession('')
+  }
+  void router.replace({
+    query: {
+      ...route.query,
+      sessionId: undefined,
+    },
+  })
+}
+
+function closeNewSessionModal() {
+  showNewSessionModal.value = false
+  pendingNewSessionAssistantId.value = null
+}
+
+async function handleSubmitNewSession(payload: { workspacePath: string; sessionTitle?: string }) {
+  if (!pendingNewSessionAssistantId.value)
+    return
+
+  const sessionId = await aiStudioStore.createSessionForAssistant(pendingNewSessionAssistantId.value, {
+    workspacePath: payload.workspacePath,
+    title: payload.sessionTitle,
+  })
+  closeNewSessionModal()
+  if (!sessionId)
+    return
+  await router.replace({
+    query: {
+      ...route.query,
+      sessionId,
+    },
+  })
 }
 
 watch(
@@ -139,6 +228,15 @@ watch(
       >
         <router-view />
       </div>
+
+      <NewSessionModal
+        v-if="showNewSessionModal && pendingNewSessionAssistant"
+        :assistant-name="pendingNewSessionAssistant.name"
+        :default-workspace-path="pendingNewSessionAssistant.workspacePath"
+        :is-group-session="false"
+        @close="closeNewSessionModal"
+        @submit="handleSubmitNewSession"
+      />
     </div>
   </div>
 </template>

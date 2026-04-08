@@ -55,6 +55,7 @@ export type AssistantStore = {
   listAssistants: () => Promise<AssistantRecord[]>
   getAssistant: (id: string) => Promise<AssistantRecord | null>
   saveAssistant: (input: SaveAssistantInput) => Promise<AssistantRecord>
+  ensureAssistant: (id: string, input: Omit<SaveAssistantInput, 'id'>) => Promise<AssistantRecord>
   deleteAssistant: (id: string) => Promise<DeleteAssistantResult | null>
   listAssistantSessions: () => Promise<AssistantSessionRecord[]>
   attachRuntimeSession: (assistantId: string, runtimeSessionId: string, title?: string | null) => Promise<AssistantSessionRecord>
@@ -124,6 +125,20 @@ export function createAssistantStore(options: AssistantStoreOptions): AssistantS
           state.assistants.push(assistant)
         }
 
+        await ensureWorkspaceDirectory(assistant.workspacePath)
+        await writeStoreState(storagePath, state)
+        return cloneAssistant(assistant)!
+      }),
+    ensureAssistant: async (id, input) =>
+      runSerialized(async () => {
+        const storagePath = resolveStoragePath(options.storagePath)
+        const state = await loadStoreState(storagePath)
+        const existing = state.assistants.find((a) => a.id === id)
+        if (existing) {
+          return cloneAssistant(existing)!
+        }
+        const assistant = createAssistant(input, id, now, resolveWorkspaceRoot(options.workspaceRoot))
+        state.assistants.push(assistant)
         await ensureWorkspaceDirectory(assistant.workspacePath)
         await writeStoreState(storagePath, state)
         return cloneAssistant(assistant)!
